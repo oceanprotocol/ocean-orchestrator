@@ -170,7 +170,7 @@ export class StoragePanel {
     margin-bottom: 6px;
     align-items: center;
   }
-  .access-row select, .access-row input {
+  .modal-card input, .modal-card select {
     font-family: inherit;
     font-size: inherit;
     color: var(--vscode-input-foreground);
@@ -178,7 +178,9 @@ export class StoragePanel {
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
     padding: 4px 6px;
     border-radius: 2px;
+    box-sizing: border-box;
   }
+  .modal-card > input { width: 100%; }
   .access-row select { width: 140px; }
   .access-row input { flex: 1; min-width: 0; }
   .access-row button { width: 28px; padding: 4px; }
@@ -241,8 +243,10 @@ export class StoragePanel {
     <table id="bucketTable" style="display:none">
       <thead>
         <tr>
+          <th>Name</th>
           <th>Bucket ID</th>
           <th>Created</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="bucketTableBody"></tbody>
@@ -251,7 +255,7 @@ export class StoragePanel {
 
   <div id="bucketDetailView" class="content" style="display:none">
     <div class="detail-header">
-      <div>Bucket ID: <code id="detailBucketId"></code></div>
+      <div>Bucket: <strong id="detailBucketName"></strong> <code id="detailBucketId"></code></div>
       <div>Owner: <code id="detailOwner"></code></div>
       <div>Access: <span id="detailAccess"></span></div>
       <button id="uploadBtn" class="upload-btn">\u2934 Upload file</button>
@@ -276,6 +280,8 @@ export class StoragePanel {
   <div id="createBucketModal" class="modal-backdrop">
     <div class="modal-card">
       <h3>New bucket</h3>
+      <label>Name (optional)</label>
+      <input id="bucketName" placeholder="Leave blank for an auto-generated name" />
       <label>Access list entry (optional)</label>
       <div class="access-row">
         <select id="accessChain"></select>
@@ -284,6 +290,18 @@ export class StoragePanel {
       <div class="modal-actions">
         <button id="cancelCreateBtn" class="btn-secondary">Cancel</button>
         <button id="confirmCreateBtn">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="renameBucketModal" class="modal-backdrop">
+    <div class="modal-card">
+      <h3>Edit bucket name</h3>
+      <label>Name</label>
+      <input id="renameBucketName" placeholder="Leave blank to use the bucket ID" />
+      <div class="modal-actions">
+        <button id="cancelRenameBtn" class="btn-secondary">Cancel</button>
+        <button id="confirmRenameBtn">Save</button>
       </div>
     </div>
   </div>
@@ -308,7 +326,8 @@ export class StoragePanel {
     files: [],
     pending: new Map(),
     configChainId: '',
-    mounted: new Set()
+    mounted: new Set(),
+    renameTarget: null
   };
 
   function mountKey(bucketId, fileName) {
@@ -413,9 +432,26 @@ export class StoragePanel {
     for (const b of state.buckets) {
       const tr = document.createElement('tr');
       tr.className = 'clickable';
-      tr.innerHTML =
-        '<td><code title="' + escHtml(b.bucketId) + '">' + escHtml(shortId(b.bucketId)) + '</code></td>' +
-        '<td>' + escHtml(formatDate(b.createdAt)) + '</td>';
+      const nameCell = document.createElement('td');
+      nameCell.textContent = b.label ? b.label : shortId(b.bucketId);
+      const idCell = document.createElement('td');
+      idCell.innerHTML =
+        '<code title="' + escHtml(b.bucketId) + '">' + escHtml(shortId(b.bucketId)) + '</code>';
+      const createdCell = document.createElement('td');
+      createdCell.textContent = formatDate(b.createdAt);
+      const actCell = document.createElement('td');
+      const renameBtn = document.createElement('button');
+      renameBtn.className = 'btn-ghost';
+      renameBtn.textContent = 'Rename';
+      renameBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openRenameModal(b);
+      });
+      actCell.appendChild(renameBtn);
+      tr.appendChild(nameCell);
+      tr.appendChild(idCell);
+      tr.appendChild(createdCell);
+      tr.appendChild(actCell);
       tr.addEventListener('click', () => openBucket(b));
       tbody.appendChild(tr);
     }
@@ -431,7 +467,9 @@ export class StoragePanel {
     document.getElementById('primaryActions').innerHTML = '';
     document.getElementById('backBtn').style.display = '';
     document.getElementById('title').textContent = 'Bucket';
-    document.getElementById('detailBucketId').textContent = b.bucketId;
+    const bucketName = b.label && b.label.trim() ? b.label : null;
+    document.getElementById('detailBucketName').textContent = bucketName || b.bucketId;
+    document.getElementById('detailBucketId').textContent = bucketName ? '(' + b.bucketId + ')' : '';
     document.getElementById('detailOwner').textContent = b.owner || '';
     document.getElementById('detailAccess').textContent = formatAccessLists(b.accessLists);
     document.getElementById('fileTableBody').innerHTML = '';
@@ -551,11 +589,44 @@ export class StoragePanel {
   function openCreateModal() {
     populateChainSelect();
     document.getElementById('accessContract').value = '';
+    document.getElementById('bucketName').value = '';
     document.getElementById('createBucketModal').classList.add('open');
   }
 
   function closeCreateModal() {
     document.getElementById('createBucketModal').classList.remove('open');
+  }
+
+  function openRenameModal(b) {
+    state.renameTarget = b.bucketId;
+    document.getElementById('renameBucketName').value = b.label || '';
+    document.getElementById('renameBucketModal').classList.add('open');
+  }
+
+  function closeRenameModal() {
+    state.renameTarget = null;
+    document.getElementById('renameBucketModal').classList.remove('open');
+  }
+
+  async function confirmRename() {
+    if (!state.renameTarget) return;
+    const bucketId = state.renameTarget;
+    const label = document.getElementById('renameBucketName').value.trim();
+    closeRenameModal();
+    setLoading(true);
+    try {
+      const res = await call('renameBucket', { bucketId, label });
+      const newLabel = res && res.label != null ? res.label : (label || null);
+      state.buckets = state.buckets.map((b) =>
+        b.bucketId === bucketId ? Object.assign({}, b, { label: newLabel }) : b
+      );
+      if (state.view === 'list') renderList();
+      showToast('Bucket name updated.');
+    } catch (e) {
+      handleStorageError(e);
+    } finally {
+      setLoading(false);
+    }
   }
 
 
@@ -578,16 +649,18 @@ export class StoragePanel {
       showToast(e.message || 'Invalid access list', 'error');
       return;
     }
+    const label = document.getElementById('bucketName').value.trim();
     closeCreateModal();
     setLoading(true);
     try {
-      const res = await call('createBucket', { accessLists });
+      const res = await call('createBucket', { accessLists, label: label || undefined });
       if (res.type === 'bucketCreated') {
         const entry = {
           bucketId: res.bucket.bucketId,
           owner: res.bucket.owner,
           createdAt: res.bucket.createdAt != null ? res.bucket.createdAt * 1000 : Date.now(),
-          accessLists: res.bucket.accessList || []
+          accessLists: res.bucket.accessList || [],
+          label: res.bucket.label != null ? res.bucket.label : (label || null)
         };
         state.buckets = [entry, ...state.buckets];
         renderList();
@@ -656,6 +729,8 @@ export class StoragePanel {
   document.getElementById('uploadBtn').addEventListener('click', uploadFile);
   document.getElementById('cancelCreateBtn').addEventListener('click', closeCreateModal);
   document.getElementById('confirmCreateBtn').addEventListener('click', confirmCreate);
+  document.getElementById('cancelRenameBtn').addEventListener('click', closeRenameModal);
+  document.getElementById('confirmRenameBtn').addEventListener('click', confirmRename);
 
   renderList();
 </script>
