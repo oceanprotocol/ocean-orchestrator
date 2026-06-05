@@ -691,9 +691,24 @@ export async function activate(context: vscode.ExtensionContext) {
           case 'createBucket': {
             const bucket = await persistentStorage.createBucket(
               config,
-              data.accessLists || []
+              data.accessLists || [],
+              data.label
             )
             reply({ type: 'bucketCreated', requestId, bucket })
+            return
+          }
+          case 'renameBucket': {
+            const result = await persistentStorage.renameBucket(
+              config,
+              data.bucketId,
+              data.label
+            )
+            reply({
+              type: 'bucketRenamed',
+              requestId,
+              bucketId: data.bucketId,
+              label: result.label
+            })
             return
           }
           case 'listFiles': {

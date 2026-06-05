@@ -50,6 +50,13 @@ export type PanelRequest =
       type: 'createBucket'
       requestId: string
       accessLists: PersistentStorageAccessList[]
+      label?: string
+    }
+  | {
+      type: 'renameBucket'
+      requestId: string
+      bucketId: string
+      label: string
     }
   | { type: 'listFiles'; requestId: string; bucketId: string }
   | { type: 'pickAndUploadFile'; requestId: string; bucketId: string }
@@ -87,7 +94,14 @@ export type PanelResponse =
         bucketId: string
         owner: string
         accessList: PersistentStorageAccessList[]
+        label?: string | null
       }
+    }
+  | {
+      type: 'bucketRenamed'
+      requestId: string
+      bucketId: string
+      label: string | null
     }
   | {
       type: 'filesLoaded'

@@ -79,18 +79,38 @@ export async function listBuckets(
 export async function createBucket(
   config: SelectedConfig,
   accessLists: PersistentStorageAccessList[],
+  label?: string,
   signal?: AbortSignal
 ): Promise<{
   bucketId: string
   owner: string
   accessList: PersistentStorageAccessList[]
+  label?: string | null
 }> {
   const { nodeUri, authToken } = requireConfig(config)
   return classify(
     ProviderInstance.createPersistentStorageBucket(
       nodeUri,
       authToken,
-      { accessLists },
+      { accessLists, label },
+      signal
+    )
+  )
+}
+
+export async function renameBucket(
+  config: SelectedConfig,
+  bucketId: string,
+  label: string | null,
+  signal?: AbortSignal
+): Promise<{ bucketId: string; label: string | null }> {
+  const { nodeUri, authToken } = requireConfig(config)
+  return classify(
+    ProviderInstance.updatePersistentStorageBucket(
+      nodeUri,
+      authToken,
+      bucketId,
+      label,
       signal
     )
   )
