@@ -56,7 +56,7 @@ export type PanelRequest =
       type: 'renameBucket'
       requestId: string
       bucketId: string
-      label: string
+      label: string | null
     }
   | { type: 'listFiles'; requestId: string; bucketId: string }
   | { type: 'pickAndUploadFile'; requestId: string; bucketId: string }

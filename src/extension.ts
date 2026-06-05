@@ -701,7 +701,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const result = await persistentStorage.renameBucket(
               config,
               data.bucketId,
-              data.label
+              data.label || null
             )
             reply({
               type: 'bucketRenamed',
