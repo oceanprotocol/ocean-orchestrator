@@ -17,7 +17,8 @@ import {
   saveResults,
   streamToString,
   stopComputeJob,
-  withRetrial
+  withRetrial,
+  getStatus
 } from './helpers/compute'
 import { validateDatasetFromInput } from './helpers/validation'
 import { SelectedConfig } from './types'
@@ -32,7 +33,7 @@ import {
 import * as mountRegistry from './helpers/persistentMountRegistry'
 import { StorageErrorCode } from './types'
 import { DEFAULT_MULTIADDR } from './helpers/p2p'
-import { ComputeAsset, ProviderInstance } from '@oceanprotocol/lib'
+import { ComputeAsset, NodeStatus, ProviderInstance } from '@oceanprotocol/lib'
 import {
   initAnalytics,
   identifyUser,
@@ -230,6 +231,20 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     })
     context.subscriptions.push(testCommand)
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ocean-protocol.getStatus', async () => {
+            let status: NodeStatus
+            try {
+                status = await getStatus(config.multiaddresses)
+            } catch (e) {
+                trackP2PError(config.address || anonymousId, e, 'getStatus')
+                throw e
+            }
+
+            return status
+        })
+    )
 
     // Add handler for environment loading
     context.subscriptions.push(

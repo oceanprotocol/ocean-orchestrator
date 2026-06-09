@@ -11,6 +11,7 @@ import {
   projectFileNames
 } from './helpers/project-data'
 import { DEFAULT_MULTIADDR } from './helpers/p2p'
+import { NodeStatus } from '@oceanprotocol/lib'
 
 export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'oceanOrchestrator'
@@ -113,6 +114,17 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 type: 'datasetValidationResult',
                 isValid: isValid
               })
+              break
+            case 'getStatus':
+                try {
+                    const status: NodeStatus = await vscode.commands.executeCommand('ocean-protocol.getStatus')
+                    webviewView.webview.postMessage({
+                        type: 'statusLoaded',
+                        hasPersistentStorage: Object.hasOwn(status, 'persistentStorage')
+                    })
+                } catch (error) {
+                    console.error('Error getting node status:', error)
+                }
               break
             case 'getEnvironments':
               try {
@@ -605,16 +617,18 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
 
               // --- Storage button state ---
               let isNodeConnected = false;
+              let hasPersistentStorage = false;
 
               function updateStorageButtonState() {
                 const btn = document.getElementById('openStorageBtn');
                 if (!btn) return;
-                const enabled = isNodeConnected && !!storedAuthToken;
+                const enabled = isNodeConnected && !!storedAuthToken && hasPersistentStorage
+                const persistentStorageDisabled = isNodeConnected && !!storedAuthToken && !hasPersistentStorage
                 btn.disabled = !enabled;
                 btn.style.opacity = enabled ? '1' : '0.6';
                 btn.title = enabled
                   ? 'Manage persistent storage buckets'
-                  : 'Connect to a node via the dashboard to enable';
+                  : persistentStorageDisabled ? 'Node does not have persistent storage enabled/configured' : 'Connect to a node via the dashboard to enable';
               }
 
               if (document.getElementById('openStorageBtn')) {
@@ -784,6 +798,16 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 detailsDiv.style.display = 'block';
               }
 
+              function loadNodeStatus() {
+                  try {
+                    vscode.postMessage({
+                      type: 'getStatus'
+                    })
+                  } catch (error) {
+                    console.error('Error getting node status:', error);
+                  }
+              }
+
               function loadEnvironments() {
                 showEnvironmentsLoading();
                 try {
@@ -883,7 +907,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       case 'configUpdate':
                           if (message.config.authToken) {
                               storedAuthToken = message.config.authToken;
-                              updateStorageButtonState();
                           }
                           let didReloadEnvironments = false;
                           if (message.config.multiaddresses !== undefined) {
@@ -915,6 +938,14 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                                 : 'Run <strong>Compute</strong> Job';
                             }
                           }
+                          if (message.config.hasPersistentStorage !== undefined) {
+                              hasPersistentStorage = message.config.hasPersistentStorage
+                              updateStorageButtonState();
+                          } else if (message.config.hasPersistentStorage === undefined) {
+                              hasPersistentStorage = false;
+                              updateStorageButtonState();
+                          }
+
                           break;
                       case 'projectFolder':
                           selectedProjectPath = message.path;
@@ -953,6 +984,16 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                         validationIcon.textContent = '✓';
                         validationIcon.style.color = '#4CAF50';
                         break;
+                      case 'statusLoaded':
+                        if (message.error) {
+                          hasPersistentStorage = false;
+                          updateStorageButtonState();
+                          return;
+                        }
+
+                        hasPersistentStorage = message.hasPersistentStorage;
+                        updateStorageButtonState();
+                        break;
                       case 'environmentsLoaded':
                           console.log('Environments loaded:', message.environments);
                           availableEnvironments = message.environments || [];
@@ -963,6 +1004,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                             detailsEl.style.display = 'block';
                             disableStartButton();
                             isNodeConnected = false;
+                            hasPersistentStorage = false;
                             updateStorageButtonState();
                             return;
                           }
@@ -971,12 +1013,15 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                             detailsEl.innerHTML = '<p style="color: var(--vscode-descriptionForeground);">No environments available</p>';
                             detailsEl.style.display = 'block';
                             disableStartButton();
+                            hasPersistentStorage = false;
                             isNodeConnected = false;
+                            
                             updateStorageButtonState();
                             return;
                           }
 
                           isNodeConnected = true;
+                          loadNodeStatus();
                           updateStorageButtonState();
                           checkStartButtonState();
 
