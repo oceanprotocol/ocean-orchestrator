@@ -116,15 +116,17 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               })
               break
             case 'getStatus':
-                try {
-                    const status: NodeStatus = await vscode.commands.executeCommand('ocean-protocol.getStatus')
-                    webviewView.webview.postMessage({
-                        type: 'statusLoaded',
-                        hasPersistentStorage: Object.hasOwn(status, 'persistentStorage')
-                    })
-                } catch (error) {
-                    console.error('Error getting node status:', error)
-                }
+              try {
+                const status: NodeStatus = await vscode.commands.executeCommand(
+                  'ocean-protocol.getStatus'
+                )
+                webviewView.webview.postMessage({
+                  type: 'statusLoaded',
+                  hasPersistentStorage: Object.hasOwn(status, 'persistentStorage')
+                })
+              } catch (error) {
+                console.error('Error getting node status:', error)
+              }
               break
             case 'getEnvironments':
               try {
