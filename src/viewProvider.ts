@@ -907,6 +907,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       case 'configUpdate':
                           if (message.config.authToken) {
                               storedAuthToken = message.config.authToken;
+                              updateStorageButtonState();
                           }
                           let didReloadEnvironments = false;
                           if (message.config.multiaddresses !== undefined) {
@@ -938,14 +939,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                                 : 'Run <strong>Compute</strong> Job';
                             }
                           }
-                          if (message.config.hasPersistentStorage !== undefined) {
-                              hasPersistentStorage = message.config.hasPersistentStorage
-                              updateStorageButtonState();
-                          } else if (message.config.hasPersistentStorage === undefined) {
-                              hasPersistentStorage = false;
-                              updateStorageButtonState();
-                          }
-
                           break;
                       case 'projectFolder':
                           selectedProjectPath = message.path;
@@ -1015,7 +1008,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                             disableStartButton();
                             hasPersistentStorage = false;
                             isNodeConnected = false;
-                            
                             updateStorageButtonState();
                             return;
                           }

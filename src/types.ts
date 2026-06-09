@@ -15,7 +15,6 @@ export class SelectedConfig {
   jobDuration?: string
   resources?: ComputeResourceRequest[]
   chainId?: number
-  hasPersistentStorage?: boolean
 
   constructor(params: Partial<SelectedConfig>) {
     Object.assign(this, params)
