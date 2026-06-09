@@ -245,7 +245,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 data.datasetPath,
                 data.dockerImage,
                 data.dockerTag,
-                data.environmentId
+                data.environmentId,
+                data.outputBucketId
               )
               break
             case 'stopComputeJob':
@@ -421,7 +422,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           #configureCompute:hover {
             background-color: var(--vscode-button-secondaryHoverBackground);
           }
-          #datasetInput {
+          #datasetInput, #outputBucketInput {
             width: 100%;
             padding: 8px;
           }
@@ -533,6 +534,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               <button id="configureCompute">Configure Compute ⚙️</button>
               <button id="openStorageBtn" disabled style="opacity:0.6;">Configure Persistent Storage</button>
               <input id="datasetInput" placeholder="Dataset URL/IPFS/Arweave/DID" />
+              <input id="outputBucketInput" placeholder="Output bucket ID (optional)" />
               <div id="mountedBadge">No persistent datasets mounted</div>
 
               <hr class="section-separator" />
@@ -734,7 +736,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       errorMessage.style.display = 'none';
 
                       // Start compute job directly
-                      vscode.postMessage({ 
+                      vscode.postMessage({
                           type: 'startComputeJob',
                           authToken: storedAuthToken,
                           algorithmPath: algorithmPath,
@@ -742,7 +744,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                           datasetPath: document.getElementById('datasetInput').value || undefined,
                           dockerImage: dockerImage || undefined,
                           dockerTag: dockerTag || undefined,
-                          environmentId: environmentId
+                          environmentId: environmentId,
+                          outputBucketId: document.getElementById('outputBucketInput')?.value || undefined
                       });
                   });
               }

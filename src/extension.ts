@@ -304,7 +304,8 @@ export async function activate(context: vscode.ExtensionContext) {
         dataset?: string,
         dockerImage?: string,
         dockerTag?: string,
-        environmentId?: string
+        environmentId?: string,
+        outputBucketId?: string
       ) => {
         console.log('1. Starting compute job...')
         console.log('Dataset:', dataset)
@@ -424,7 +425,8 @@ export async function activate(context: vscode.ExtensionContext) {
               dockerfile,
               additionalDockerFiles,
               envVars,
-              persistentAssets
+              persistentAssets,
+              outputBucketId
             )
             console.log('Compute result received:', computeResponse)
             const jobId = computeResponse.jobId
