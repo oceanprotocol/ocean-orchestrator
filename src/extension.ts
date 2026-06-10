@@ -30,6 +30,7 @@ import {
   FileTooLargeError
 } from './helpers/persistentStorage'
 import * as mountRegistry from './helpers/persistentMountRegistry'
+import * as outputBucketRegistry from './helpers/outputBucketRegistry'
 import { StorageErrorCode } from './types'
 import { DEFAULT_MULTIADDR } from './helpers/p2p'
 import { ComputeAsset, ProviderInstance } from '@oceanprotocol/lib'
@@ -80,6 +81,15 @@ function pushStorageConfigSnapshot() {
     nodeUri: config.multiaddresses?.[0]
   })
   pushMountedSnapshot()
+  pushOutputBucketSnapshot()
+}
+
+function pushOutputBucketSnapshot() {
+  const scope = currentMountScope()
+  const bucketId = outputBucketRegistry.get(scope) ?? null
+  const bucketName = outputBucketRegistry.getName(scope) ?? null
+  StoragePanel.currentPanel?.sendMessage({ type: 'outputBucketSnapshot', bucketId })
+  provider?.sendMessage({ type: 'outputBucketUpdate', bucketId, bucketName })
 }
 
 function pushMountedSnapshot() {
@@ -159,7 +169,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const completedJobs = new Map<
     string,
     {
-      archiveIndex: number
+      archiveIndex: number | null
       archiveSize: number
       resultsFolderPath: string
       downloadCount: number
@@ -304,8 +314,7 @@ export async function activate(context: vscode.ExtensionContext) {
         dataset?: string,
         dockerImage?: string,
         dockerTag?: string,
-        environmentId?: string,
-        outputBucketId?: string
+        environmentId?: string
       ) => {
         console.log('1. Starting compute job...')
         console.log('Dataset:', dataset)
@@ -414,6 +423,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             const persistentAssets = await resolvePersistentMountAssets(progress)
+            const outputBucketId = outputBucketRegistry.get(currentMountScope())
 
             const computeResponse = await computeStart(
               config,
@@ -430,6 +440,13 @@ export async function activate(context: vscode.ExtensionContext) {
             )
             console.log('Compute result received:', computeResponse)
             const jobId = computeResponse.jobId
+            if (outputBucketId) {
+              const outputBucketName =
+                outputBucketRegistry.getName(currentMountScope()) || outputBucketId
+              console.log(
+                `Compute job started with ID: ${jobId}. Output bucket selected - results will be saved in bucket ${outputBucketName}. Existing files will be overwritten`
+              )
+            }
             // Save the job ID for future use
             savedJobId = jobId
 
@@ -538,7 +555,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     completedJobs.delete(completedJobs.keys().next().value!)
                   }
                   completedJobs.set(jobId, {
-                    archiveIndex: archive?.index ?? 0,
+                    // null when the job has no outputs.tar archive (e.g. results
+                    // were written to an output bucket); used to skip archive download
+                    archiveIndex: archive ? archive.index : null,
                     archiveSize: archive?.filesize ?? 0,
                     resultsFolderPath,
                     downloadCount: 0,
@@ -630,7 +649,8 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                   : undefined
               try {
-                const totalFiles = job.logResults.length + 1
+                const hasArchive = job.archiveIndex != null
+                const totalFiles = job.logResults.length + (hasArchive ? 1 : 0)
                 let filesDone = 0
 
                 for (const log of job.logResults) {
@@ -646,25 +666,35 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
 
                 if (!abortController.signal.aborted) {
-                  job.downloadCount += 1
-                  const prefix =
-                    job.downloadCount === 1
-                      ? 'result-output'
-                      : `result-output(${job.downloadCount})`
-                  const filePath = await saveOutput(
-                    config,
-                    jobId,
-                    job.archiveIndex,
-                    job.resultsFolderPath,
-                    prefix,
-                    onDownloadProgress,
-                    job.archiveSize > 0 ? job.archiveSize : undefined,
-                    abortController.signal
-                  )
-                  outputChannel.appendLine(`Results saved to: ${filePath}`)
-                  vscode.window.showInformationMessage(
-                    'Outputs available in results folder.'
-                  )
+                  if (job.archiveIndex != null) {
+                    job.downloadCount += 1
+                    const prefix =
+                      job.downloadCount === 1
+                        ? 'result-output'
+                        : `result-output(${job.downloadCount})`
+                    const filePath = await saveOutput(
+                      config,
+                      jobId,
+                      job.archiveIndex,
+                      job.resultsFolderPath,
+                      prefix,
+                      onDownloadProgress,
+                      job.archiveSize > 0 ? job.archiveSize : undefined,
+                      abortController.signal
+                    )
+                    outputChannel.appendLine(`Results saved to: ${filePath}`)
+                    vscode.window.showInformationMessage(
+                      'Outputs available in results folder.'
+                    )
+                  } else {
+                    // output-bucket job: results live in the bucket, no outputs.tar to fetch
+                    outputChannel.appendLine(
+                      'Results were written to the output bucket. Open Persistent Storage to view them.'
+                    )
+                    vscode.window.showInformationMessage(
+                      'Results are in the output bucket — open Persistent Storage to view them.'
+                    )
+                  }
                 }
               } catch (error) {
                 if (abortController.signal.aborted) {
@@ -776,6 +806,20 @@ export async function activate(context: vscode.ExtensionContext) {
               bucketId: data.bucketId,
               fileName: data.fileName,
               mounted: !!data.mounted
+            })
+            return
+          }
+          case 'setOutputBucket': {
+            outputBucketRegistry.set(
+              currentMountScope(),
+              data.bucketId || null,
+              data.bucketName
+            )
+            pushOutputBucketSnapshot()
+            reply({
+              type: 'outputBucketSet',
+              requestId,
+              bucketId: data.bucketId || null
             })
             return
           }

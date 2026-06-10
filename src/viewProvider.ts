@@ -245,8 +245,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 data.datasetPath,
                 data.dockerImage,
                 data.dockerTag,
-                data.environmentId,
-                data.outputBucketId
+                data.environmentId
               )
               break
             case 'stopComputeJob':
@@ -422,7 +421,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           #configureCompute:hover {
             background-color: var(--vscode-button-secondaryHoverBackground);
           }
-          #datasetInput, #outputBucketInput {
+          #datasetInput {
             width: 100%;
             padding: 8px;
           }
@@ -434,6 +433,13 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           }
           #mountedBadge.has-mounts {
             color: var(--vscode-foreground);
+          }
+          #outputBucketBadge {
+            font-size: 0.85em;
+            color: var(--vscode-foreground);
+            margin: 0 0 6px;
+            word-break: break-all;
+            display: none;
           }
           #stopComputeBtn {
             margin: 5px 0;
@@ -534,8 +540,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               <button id="configureCompute">Configure Compute ⚙️</button>
               <button id="openStorageBtn" disabled style="opacity:0.6;">Configure Persistent Storage</button>
               <input id="datasetInput" placeholder="Dataset URL/IPFS/Arweave/DID" />
-              <input id="outputBucketInput" placeholder="Output bucket ID (optional)" />
               <div id="mountedBadge">No persistent datasets mounted</div>
+              <div id="outputBucketBadge"></div>
 
               <hr class="section-separator" />
               <select id="jobSelect" class="environment-select" disabled>
@@ -588,6 +594,19 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               let storedEnvironmentId = null;
               let storedMultiaddrs = null;
               let mountedEntries = [];
+              let outputBucket = null;
+
+              function renderOutputBucketBadge() {
+                const el = document.getElementById('outputBucketBadge');
+                if (!el) return;
+                if (!outputBucket || !outputBucket.bucketId) {
+                  el.style.display = 'none';
+                  el.textContent = '';
+                  return;
+                }
+                el.style.display = 'block';
+                el.textContent = 'Output bucket: ' + (outputBucket.bucketName || outputBucket.bucketId) + ' — existing files will be overwritten';
+              }
 
               function renderMountedBadge() {
                 const el = document.getElementById('mountedBadge');
@@ -744,8 +763,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                           datasetPath: document.getElementById('datasetInput').value || undefined,
                           dockerImage: dockerImage || undefined,
                           dockerTag: dockerTag || undefined,
-                          environmentId: environmentId,
-                          outputBucketId: document.getElementById('outputBucketInput')?.value || undefined
+                          environmentId: environmentId
                       });
                   });
               }
@@ -945,6 +963,10 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       case 'mountedUpdate':
                         mountedEntries = message.entries || [];
                         renderMountedBadge();
+                        break;
+                      case 'outputBucketUpdate':
+                        outputBucket = { bucketId: message.bucketId, bucketName: message.bucketName };
+                        renderOutputBucketBadge();
                         break;
                       case 'datasetValidationResult':
                         const validationIcon = document.getElementById('datasetValidationIcon');
