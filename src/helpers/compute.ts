@@ -12,6 +12,7 @@ import {
   ComputeResultStream,
   ExtendedMetadataAlgorithm,
   FileObjectType,
+  NodeStatus,
   ProviderInstance
 } from '@oceanprotocol/lib'
 import { fetchDdoByDid } from './indexer'
@@ -432,6 +433,10 @@ export async function saveOutput(
   return withRetrial(() =>
     attemptSaveOutput(config, jobId, index, filePath, resultsDir, prefix, onProgress, totalSize, cancelSignal)
   )
+}
+
+export async function getStatus(multiaddresses: string[] | undefined): Promise<NodeStatus> {
+  return await ProviderInstance.getNodeStatus(getNodeUri(multiaddresses))
 }
 
 export async function getComputeEnvironments(multiaddresses: string[] | undefined) {
