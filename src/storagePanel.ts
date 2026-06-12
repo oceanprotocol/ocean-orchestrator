@@ -243,6 +243,7 @@ export class StoragePanel {
     <table id="bucketTable" style="display:none">
       <thead>
         <tr>
+          <th style="width:70px">Output</th>
           <th>Name</th>
           <th>Bucket ID</th>
           <th>Created</th>
@@ -327,7 +328,8 @@ export class StoragePanel {
     pending: new Map(),
     configChainId: '',
     mounted: new Set(),
-    renameTarget: null
+    renameTarget: null,
+    outputBucketId: null
   };
 
   function mountKey(bucketId, fileName) {
@@ -432,6 +434,27 @@ export class StoragePanel {
     for (const b of state.buckets) {
       const tr = document.createElement('tr');
       tr.className = 'clickable';
+      const outputCell = document.createElement('td');
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'outputBucket';
+      radio.checked = state.outputBucketId === b.bucketId;
+      radio.title = 'Set as output bucket for compute jobs';
+      radio.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const next = state.outputBucketId === b.bucketId ? null : b.bucketId;
+        try {
+          await call('setOutputBucket', {
+            bucketId: next,
+            bucketName: next ? (b.label || b.bucketId) : null
+          });
+          state.outputBucketId = next;
+        } catch (err) {
+          handleStorageError(err);
+        }
+        renderList();
+      });
+      outputCell.appendChild(radio);
       const nameCell = document.createElement('td');
       nameCell.textContent = b.label ? b.label : shortId(b.bucketId);
       const idCell = document.createElement('td');
@@ -448,6 +471,7 @@ export class StoragePanel {
         openRenameModal(b);
       });
       actCell.appendChild(renameBtn);
+      tr.appendChild(outputCell);
       tr.appendChild(nameCell);
       tr.appendChild(idCell);
       tr.appendChild(createdCell);
@@ -715,6 +739,11 @@ export class StoragePanel {
     if (data.type === 'mountedSnapshot') {
       state.mounted = new Set((data.entries || []).map((e) => mountKey(e.bucketId, e.fileName)));
       if (state.view === 'detail') renderFiles();
+      return;
+    }
+    if (data.type === 'outputBucketSnapshot') {
+      state.outputBucketId = data.bucketId || null;
+      if (state.view === 'list') renderList();
       return;
     }
     if (data.requestId && state.pending.has(data.requestId)) {

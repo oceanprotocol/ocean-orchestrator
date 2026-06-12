@@ -178,7 +178,8 @@ export async function computeStart(
   envVars?: {
     [key: string]: string
   },
-  additionalAssets?: ComputeAsset[]
+  additionalAssets?: ComputeAsset[],
+  outputBucketId?: string
 ): Promise<ComputeJob> {
   try {
     const container = getContainerConfig(
@@ -217,7 +218,15 @@ export async function computeStart(
         Number(config.jobDuration),
         config.feeToken!,
         config.resources!,
-        config.chainId!
+        config.chainId!,
+        undefined, // metadata
+        undefined, // additionalViewers
+        undefined, // output
+        undefined, // policyServer
+        undefined, // signal
+        undefined, // queueMaxWaitTime
+        undefined, // dockerRegistryAuth
+        outputBucketId
       )
       return Array.isArray(computeJob) ? computeJob[0] : computeJob
     }
@@ -228,7 +237,15 @@ export async function computeStart(
       config.environmentId,
       datasets,
       algorithm,
-      config.resources
+      config.resources,
+      undefined, // metadata
+      undefined, // additionalViewers
+      undefined, // output
+      undefined, // policyServer
+      undefined, // signal
+      undefined, // queueMaxWaitTime
+      undefined, // dockerRegistryAuth
+      outputBucketId
     )
     return Array.isArray(computeJob) ? computeJob[0] : computeJob
   } catch (e) {

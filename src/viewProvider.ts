@@ -448,6 +448,13 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           #mountedBadge.has-mounts {
             color: var(--vscode-foreground);
           }
+          #outputBucketBadge {
+            font-size: 0.85em;
+            color: var(--vscode-foreground);
+            margin: 0 0 6px;
+            word-break: break-all;
+            display: none;
+          }
           #stopComputeBtn {
             margin: 5px 0;
           }
@@ -548,6 +555,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               <button id="openStorageBtn" disabled style="opacity:0.6;">Configure Persistent Storage</button>
               <input id="datasetInput" placeholder="Dataset URL/IPFS/Arweave/DID" />
               <div id="mountedBadge">No persistent datasets mounted</div>
+              <div id="outputBucketBadge"></div>
 
               <hr class="section-separator" />
               <select id="jobSelect" class="environment-select" disabled>
@@ -600,6 +608,19 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               let storedEnvironmentId = null;
               let storedMultiaddrs = null;
               let mountedEntries = [];
+              let outputBucket = null;
+
+              function renderOutputBucketBadge() {
+                const el = document.getElementById('outputBucketBadge');
+                if (!el) return;
+                if (!outputBucket || !outputBucket.bucketId) {
+                  el.style.display = 'none';
+                  el.textContent = '';
+                  return;
+                }
+                el.style.display = 'block';
+                el.textContent = 'Output bucket: ' + (outputBucket.bucketName || outputBucket.bucketId) + ' — existing files will be overwritten';
+              }
 
               function renderMountedBadge() {
                 const el = document.getElementById('mountedBadge');
@@ -750,7 +771,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       errorMessage.style.display = 'none';
 
                       // Start compute job directly
-                      vscode.postMessage({ 
+                      vscode.postMessage({
                           type: 'startComputeJob',
                           authToken: storedAuthToken,
                           algorithmPath: algorithmPath,
@@ -968,6 +989,10 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       case 'mountedUpdate':
                         mountedEntries = message.entries || [];
                         renderMountedBadge();
+                        break;
+                      case 'outputBucketUpdate':
+                        outputBucket = { bucketId: message.bucketId, bucketName: message.bucketName };
+                        renderOutputBucketBadge();
                         break;
                       case 'datasetValidationResult':
                         const validationIcon = document.getElementById('datasetValidationIcon');

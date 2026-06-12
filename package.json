@@ -3,7 +3,7 @@
   "publisher": "OceanProtocol",
   "displayName": "Ocean Orchestrator",
   "description": "Run affordable AI jobs from your editor with a one-click workflow and pay-per-use mechanism.",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -116,7 +116,7 @@
     "@libp2p/tls": "^3.0.10",
     "@libp2p/websockets": "^10.1.2",
     "@multiformats/multiaddr": "^13.0.1",
-    "@oceanprotocol/lib": "8.4.0",
+    "@oceanprotocol/lib": "8.5.1",
     "chai": "^4.3.10",
     "cross-fetch": "^4.0.0",
     "crypto": "^1.0.1",
