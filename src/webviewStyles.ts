@@ -245,7 +245,7 @@ a:hover {
 /* Size variants */
 .btn-sm {
   font-size: var(--fs-xs);
-  padding: var(--sp-2) var(--sp-3);
+  padding: 5px var(--sp-3);
 }
 
 .btn-icon {

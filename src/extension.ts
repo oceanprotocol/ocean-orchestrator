@@ -106,6 +106,7 @@ async function pushEnvInfo() {
     provider?.sendMessage({ type: 'envInfo', cost: null, balance: null, symbol: '' })
     return
   }
+  provider.sendMessage({ type: 'envInfo', loading: true })
   const symbol = await getTokenSymbol(config.feeToken).catch(() => '')
   let cost: number | null = null
   let balance: number | null = null

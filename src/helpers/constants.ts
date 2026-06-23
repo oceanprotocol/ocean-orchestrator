@@ -1,8 +1,13 @@
 import * as vscode from 'vscode'
+import addresses from '@oceanprotocol/contracts/addresses/address.json'
 
 export const BASE_CHAIN_ID = 8453
 
-export const ESCROW_ADDRESS_BASE = '0x43eC0a34E1b70C7f8E579ab866F37642777727E7'
+const baseAddresses = Object.values(addresses).find(
+  (c: any) => c && c.chainId === BASE_CHAIN_ID
+) as { Escrow: string }
+
+export const ESCROW_ADDRESS_BASE = baseAddresses.Escrow
 
 export function getBaseRpcUrl(): string {
   return vscode.workspace

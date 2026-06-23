@@ -400,10 +400,7 @@ ${webviewCss()}
 
       <div class="footer-actions">
         <button class="btn btn-ghost btn-sm" id="addFundsBtn">Add funds ↗</button>
-        <button class="btn btn-pri" id="saveBtn">Save config</button>
-      </div>
-      <div style="margin-top:var(--sp-2)">
-        <button class="btn btn-pri" id="runBtn" style="width:100%" disabled>Save &amp; run ▶</button>
+        <button class="btn btn-pri" id="saveBtn">Save</button>
       </div>
     </div>
 
@@ -677,12 +674,10 @@ function startBalanceAgeTicker() {
 // Run button gating
 // ============================================================
 function updateRunButton() {
-  const runBtn = document.getElementById('runBtn');
   const warn = document.getElementById('balanceWarn');
   const insufficient =
     state.balance !== null && state.cost !== null && state.balance < state.cost;
-  warn.style.display = insufficient ? '' : 'none';
-  runBtn.disabled = !state.selectedEnvId || state.balance === null || insufficient;
+  if (warn) warn.style.display = insufficient ? '' : 'none';
 }
 
 // ============================================================
@@ -870,17 +865,6 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
     showToast('Config saved');
   } catch (e) {
     showToast((e && e.message) || 'Save failed', 'error');
-  }
-});
-
-document.getElementById('runBtn').addEventListener('click', async () => {
-  const payload = buildSavePayload();
-  if (!payload) return;
-  try {
-    await call('runJob', payload);
-    showToast('Job submitted');
-  } catch (e) {
-    showToast((e && e.message) || 'Failed to start job', 'error');
   }
 });
 

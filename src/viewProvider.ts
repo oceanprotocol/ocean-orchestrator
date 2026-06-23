@@ -445,10 +445,15 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      direction: rtl;
+      text-align: left;
       font-family: var(--vscode-editor-font-family);
       font-size: var(--fs-xs);
       color: var(--vscode-foreground);
       margin: var(--sp-1) 0;
+    }
+    #projectPath.empty {
+      direction: ltr;
     }
     #projectPath.empty {
       color: var(--vscode-descriptionForeground);
@@ -688,8 +693,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       <input type="text" id="jobNameInput" placeholder="generating…">
     </div>
     <div class="project-buttons">
-      <button class="btn btn-sm btn-ghost" id="selectFolderBtn" title="Select project">Select Project</button>
-      <button class="btn btn-sm btn-ghost" id="newFolderBtn" title="New project">New Project</button>
+      <button class="btn btn-sm btn-ghost" id="selectFolderBtn" title="Select project">Select</button>
+      <button class="btn btn-sm btn-ghost" id="newFolderBtn" title="New project">New</button>
     </div>
     <div id="projectPath" class="empty">No folder selected</div>
     <div id="dockerFields">
@@ -764,6 +769,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     let isRunning = false;
     let elapsedSeconds = 0;
     let runningJobId = null;
+    const JOBS_PAGE = 6;
+    let jobsShown = JOBS_PAGE;
     let timerInterval = null;
     let jobs = [];
     let selectedJobId = null;
@@ -1019,11 +1026,9 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
 
     function renderProject() {
       if (projectPath) {
-        // Show the tail (…/parent/folder) so the project folder name is visible;
-        // full path on hover.
-        const segs = projectPath.split('/').filter(Boolean);
-        const tail = segs.length > 2 ? '…/' + segs.slice(-2).join('/') : projectPath;
-        projectPathEl.textContent = tail;
+        // Full path; CSS left-truncates (ellipsis at start) so as much of the
+        // tail as fits is shown, with the folder name always visible.
+        projectPathEl.textContent = projectPath;
         projectPathEl.classList.remove('empty');
         projectPathEl.title = projectPath;
       } else {
@@ -1071,10 +1076,15 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         envResources.innerHTML = cells ? '<div class="env-metric-grid">' + cells + '</div>' : '';
 
         const sym = envInfo.symbol || '';
-        envCostEl.textContent =
-          envInfo.cost != null ? 'Est. cost ≈ ' + envInfo.cost.toFixed(4) + ' ' + sym + ' / run' : '';
-        envBalanceEl.textContent =
-          envInfo.balance != null ? 'Escrow ' + envInfo.balance.toFixed(4) + ' ' + sym : '';
+        if (envInfo.loading) {
+          envCostEl.textContent = 'Est. cost · loading…';
+          envBalanceEl.textContent = 'Escrow · loading…';
+        } else {
+          envCostEl.textContent =
+            envInfo.cost != null ? 'Est. cost ≈ ' + envInfo.cost.toFixed(4) + ' ' + sym + ' / run' : 'Est. cost unavailable';
+          envBalanceEl.textContent =
+            envInfo.balance != null ? 'Escrow ' + envInfo.balance.toFixed(4) + ' ' + sym : 'Escrow unavailable';
+        }
       } else {
         envCard.classList.remove('visible');
       }
@@ -1133,7 +1143,9 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         if (br && !ar) return 1;
         return toMs(b.createdAt) - toMs(a.createdAt);
       });
-      jobsListEl.innerHTML = sorted.map((j) => {
+      if (jobsShown < JOBS_PAGE) jobsShown = JOBS_PAGE;
+      const visible = sorted.slice(0, jobsShown);
+      let html = visible.map((j) => {
         const sel = j.jobId === selectedJobId ? ' selected' : '';
         const status = effStatus(j);
         const sc = statusClass(status);
@@ -1150,6 +1162,11 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           '</div>'
         );
       }).join('');
+      const remaining = sorted.length - visible.length;
+      if (remaining > 0) {
+        html += '<button id="jobsMoreBtn" class="btn btn-sm btn-ghost" style="width:100%;margin-top:var(--sp-1);">Show ' + remaining + ' more</button>';
+      }
+      jobsListEl.innerHTML = html;
 
       // Attach click handlers: select job and switch logs to that job
       jobsListEl.querySelectorAll('.job-row').forEach((el) => {
@@ -1162,6 +1179,13 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           vscode.postMessage({ type: 'viewJobLogs', jobId: id });
         });
       });
+      const moreBtn = document.getElementById('jobsMoreBtn');
+      if (moreBtn) {
+        moreBtn.addEventListener('click', () => {
+          jobsShown += JOBS_PAGE;
+          renderJobs();
+        });
+      }
     }
 
     function renderFooter() {
@@ -1338,7 +1362,11 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'envInfo':
-          envInfo = { cost: msg.cost, balance: msg.balance, symbol: msg.symbol };
+          if (msg.loading) {
+            envInfo = { ...envInfo, loading: true };
+          } else {
+            envInfo = { cost: msg.cost, balance: msg.balance, symbol: msg.symbol, loading: false };
+          }
           renderEnvCard();
           break;
 
