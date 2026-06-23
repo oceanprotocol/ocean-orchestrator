@@ -1060,6 +1060,15 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
             else gpuVal = (gpuVal || 0) + r.amount;
           }
         }
+        // Available maxes from the env (selected / available, X/Y).
+        const maxById = {};
+        (envInfo.available || []).forEach((r) => {
+          if (!r.id) return;
+          if (r.id.includes('cpu')) maxById.cpu = r.max;
+          else if (r.id.includes('ram')) maxById.ram = r.max;
+          else if (r.id.includes('disk')) maxById.disk = r.max;
+          else maxById.gpu = (maxById.gpu || 0) + r.max;
+        });
         let maxRunStr = null;
         if (jobSummary?.duration) {
           const s = Number(jobSummary.duration);
@@ -1067,11 +1076,12 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           else if (s >= 60) maxRunStr = Math.round(s / 60) + 'm';
           else maxRunStr = s + 's';
         }
+        const xy = (sel, max) => (max != null ? sel + ' / ' + max : String(sel));
         let cells = '';
-        if (cpuVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + cpuVal + '</div><div class="env-metric-lbl">CPU</div></div>';
-        if (ramVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + (fmtGB(ramVal) || ramVal) + '</div><div class="env-metric-lbl">RAM</div></div>';
-        if (diskVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + (fmtGB(diskVal) || diskVal) + '</div><div class="env-metric-lbl">DISK</div></div>';
-        if (gpuVal != null && gpuVal > 0) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + gpuVal + '</div><div class="env-metric-lbl">GPU</div></div>';
+        if (cpuVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(cpuVal, maxById.cpu) + '</div><div class="env-metric-lbl">CPU</div></div>';
+        if (ramVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(ramVal, maxById.ram) + ' GB</div><div class="env-metric-lbl">RAM</div></div>';
+        if (diskVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(diskVal, maxById.disk) + ' GB</div><div class="env-metric-lbl">DISK</div></div>';
+        if (gpuVal != null && gpuVal > 0) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(gpuVal, maxById.gpu) + '</div><div class="env-metric-lbl">GPU</div></div>';
         if (maxRunStr != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + maxRunStr + '</div><div class="env-metric-lbl">MAX RUN</div></div>';
         envResources.innerHTML = cells ? '<div class="env-metric-grid">' + cells + '</div>' : '';
 
@@ -1365,7 +1375,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           if (msg.loading) {
             envInfo = { ...envInfo, loading: true };
           } else {
-            envInfo = { cost: msg.cost, balance: msg.balance, symbol: msg.symbol, loading: false };
+            envInfo = { cost: msg.cost, balance: msg.balance, symbol: msg.symbol, available: msg.available || [], loading: false };
           }
           renderEnvCard();
           break;

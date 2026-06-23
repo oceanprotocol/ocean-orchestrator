@@ -185,6 +185,43 @@ ${webviewCss()}
   align-items: center;
   gap: var(--sp-1);
   font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.gpu-item input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--vscode-checkbox-border, var(--vscode-panel-border));
+  border-radius: 3px;
+  background: var(--vscode-checkbox-background, var(--vscode-input-background));
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.gpu-item input[type='checkbox']:checked {
+  background: var(--vscode-button-background);
+  border-color: var(--vscode-button-background);
+}
+
+.gpu-item input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--vscode-button-foreground);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.gpu-item input[type='checkbox']:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
 }
 
 /* Input row for dataset */
@@ -766,6 +803,12 @@ window.addEventListener('message', (event) => {
       }
       if (data.durationSeconds != null) {
         state.resources.durationSeconds = Number(data.durationSeconds);
+      }
+      if (Array.isArray(data.gpuIds)) {
+        state.gpuSelections = {};
+        for (const id of data.gpuIds) {
+          state.gpuSelections[id] = true;
+        }
       }
       // If envs already loaded (snapshot arrived after listEnvs), re-apply.
       if (state.envs.length > 0) populateEnvSelect(state.envs);

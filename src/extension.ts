@@ -110,9 +110,11 @@ async function pushEnvInfo() {
   const symbol = await getTokenSymbol(config.feeToken).catch(() => '')
   let cost: number | null = null
   let balance: number | null = null
+  let available: { id: string; max: number }[] = []
   try {
     const env = (await fetchPaidEnvironments()).find((e) => e.envId === config.environmentId)
     if (env) {
+      available = (env.resources || []).map((r: any) => ({ id: r.id, max: r.max ?? r.maximum }))
       const r = await estimateCost({
         env: { ...env, multiaddrs: config.multiaddresses ?? env.multiaddrs },
         resources: config.resources || [],
@@ -125,7 +127,7 @@ async function pushEnvInfo() {
   try {
     balance = await getEscrowBalance(config.feeToken, config.address)
   } catch {}
-  provider.sendMessage({ type: 'envInfo', cost, balance, symbol })
+  provider.sendMessage({ type: 'envInfo', cost, balance, symbol, available })
 }
 
 function currentMountScope(): mountRegistry.MountScope {
@@ -1116,6 +1118,9 @@ export async function activate(context: vscode.ExtensionContext) {
             ram: resourceAmount('ram'),
             disk: resourceAmount('disk')
           },
+          gpuIds: (config.resources || [])
+            .filter((r) => !['cpu', 'ram', 'disk'].includes(r.id))
+            .map((r) => r.id),
           durationSeconds: config.jobDuration ? Number(config.jobDuration) : undefined
         })
       })
