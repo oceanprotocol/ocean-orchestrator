@@ -19,3 +19,8 @@ mockRequire('@libp2p/utils', {
 })
 
 require('./extension.test')
+require('./unit/jobNames.test')
+require('./unit/incentive.test')
+require('./unit/escrow.test')
+require('./unit/cost.test')
+require('./unit/jobStore.test')

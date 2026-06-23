@@ -10,8 +10,9 @@ import {
   envTemplate,
   projectFileNames
 } from './helpers/project-data'
+import { generateJobName } from './helpers/jobNames'
 import { DEFAULT_MULTIADDR } from './helpers/p2p'
-import { NodeStatus } from '@oceanprotocol/lib'
+import { webviewCss } from './webviewStyles'
 
 export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'oceanOrchestrator'
@@ -27,10 +28,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   public notifyConfigUpdate(config: SelectedConfig) {
     this.config = config
     if (this._view?.webview) {
-      this._view.webview.postMessage({
-        type: 'configUpdate',
-        config
-      })
+      this._view.webview.postMessage(this._buildStateUpdate(config))
     }
   }
 
@@ -40,10 +38,42 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private _buildStateUpdate(config: SelectedConfig) {
+    const connected = !!config.authToken
+    const mode: 'default-free' | 'connected-paid' = connected ? 'connected-paid' : 'default-free'
+
+    let nodeId: string | undefined
+    if (config.environmentId) {
+      const id = config.environmentId
+      nodeId = id.length > 16 ? id.slice(0, 8) + '…' + id.slice(-6) : id
+    } else if (config.multiaddresses?.[0] && config.multiaddresses[0] !== DEFAULT_MULTIADDR) {
+      const addr = config.multiaddresses[0]
+      const parts = addr.split('/')
+      const peerId = parts[parts.length - 1]
+      nodeId = peerId.length > 16 ? peerId.slice(0, 8) + '…' + peerId.slice(-6) : peerId
+    }
+
+    const envId = config.environmentId
+    const envShort = envId
+      ? (envId.length > 14 ? envId.slice(0, 8) + '…' + envId.slice(-6) : envId)
+      : undefined
+
+    return {
+      type: 'stateUpdate',
+      mode,
+      status: { connected, nodeId, address: config.address, isFree: config.isFreeCompute },
+      jobSummary: {
+        envId,
+        envShort,
+        resources: config.resources ?? [],
+        duration: config.jobDuration
+      }
+    }
+  }
+
   private async closeOldProjectTabs() {
     try {
       const openEditors = vscode.window.tabGroups.all.flatMap((group) => group.tabs)
-
       for (const tab of openEditors) {
         if (tab.input instanceof vscode.TabInputText) {
           const fileName = path.basename(tab.input.uri.fsPath)
@@ -86,7 +116,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
-    context: vscode.WebviewViewResolveContext,
+    _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
   ) {
     console.log('resolveWebviewView called')
@@ -100,52 +130,13 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
 
       webviewView.webview.html = this._getHtmlForWebview(webviewView.webview)
 
+      webviewView.webview.postMessage({ type: 'defaultJobName', name: generateJobName() })
+
       webviewView.webview.onDidReceiveMessage(async (data) => {
         console.log('Received message from webview:', data)
 
         try {
           switch (data.type) {
-            case 'validateDatasetFromInput':
-              const isValid = await vscode.commands.executeCommand(
-                'ocean-protocol.validateDataset',
-                data.input
-              )
-              webviewView.webview.postMessage({
-                type: 'datasetValidationResult',
-                isValid: isValid
-              })
-              break
-            case 'getStatus':
-              try {
-                const status: NodeStatus = await vscode.commands.executeCommand(
-                  'ocean-protocol.getStatus'
-                )
-                webviewView.webview.postMessage({
-                  type: 'statusLoaded',
-                  hasPersistentStorage: Object.hasOwn(status, 'persistentStorage')
-                })
-              } catch (error) {
-                console.error('Error getting node status:', error)
-              }
-              break
-            case 'getEnvironments':
-              try {
-                const environments = await vscode.commands.executeCommand(
-                  'ocean-protocol.getEnvironments'
-                )
-                webviewView.webview.postMessage({
-                  type: 'environmentsLoaded',
-                  environments: environments
-                })
-              } catch (error) {
-                console.error('Error loading environments:', error)
-                webviewView.webview.postMessage({
-                  type: 'environmentsLoaded',
-                  environments: [],
-                  error: 'Failed to load compute environments'
-                })
-              }
-              break
             case 'selectProjectFolder': {
               const folderUri = await vscode.window.showOpenDialog({
                 canSelectFiles: false,
@@ -161,11 +152,28 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 const projectType = await detectProjectType(folderUri[0].fsPath)
                 const algorithmFileName =
                   getLanguageTemplates(projectType).algorithmFileName
+                const algorithmPath = path.join(folderUri[0].fsPath, algorithmFileName)
+                const resultsFolderPath = path.join(folderUri[0].fsPath, 'results')
+
+                try {
+                  await vscode.commands.executeCommand(
+                    'revealInExplorer',
+                    vscode.Uri.file(algorithmPath)
+                  )
+                } catch {
+                }
+
+                await vscode.commands.executeCommand(
+                  'ocean-protocol.setSelectedProject',
+                  algorithmPath,
+                  resultsFolderPath
+                )
 
                 webviewView.webview.postMessage({
                   type: 'projectFolder',
                   path: folderUri[0].fsPath,
                   projectType: projectType,
+                  algorithmPath,
                   algorithmFileName: algorithmFileName
                 })
               }
@@ -187,7 +195,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 })
 
                 if (projectName) {
-                  // Show language selection dialog
                   const availableLanguages = getAvailableLanguages()
                   const language = await vscode.window.showQuickPick(availableLanguages, {
                     placeHolder: 'Select preferred language',
@@ -230,13 +237,26 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       await this.closeOldProjectTabs()
                       await this.openProjectFiles(projectPath)
 
+                      const algorithmPath = path.join(projectPath, templates.algorithmFileName)
+
+                      try {
+                        await vscode.commands.executeCommand(
+                          'revealInExplorer',
+                          vscode.Uri.file(algorithmPath)
+                        )
+                      } catch {
+                      }
+
+                      await vscode.commands.executeCommand(
+                        'ocean-protocol.setSelectedProject',
+                        algorithmPath,
+                        resultsPath
+                      )
+
                       webviewView.webview.postMessage({
                         type: 'projectCreated',
                         projectPath: projectPath,
-                        algorithmPath: path.join(
-                          projectPath,
-                          templates.algorithmFileName
-                        ),
+                        algorithmPath,
                         resultsPath: resultsPath,
                         language: language
                       })
@@ -249,54 +269,67 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               }
               break
             }
-            case 'startComputeJob':
-              console.log('Starting compute job with data:', data)
-              await vscode.commands.executeCommand(
-                'ocean-protocol.startComputeJob',
-                data.algorithmPath,
-                data.resultsFolderPath,
-                data.authToken,
-                data.datasetPath,
-                data.dockerImage,
-                data.dockerTag,
-                data.environmentId
-              )
+            case 'runFreeJob':
+              await vscode.commands.executeCommand('ocean-protocol.runFreeJob', {
+                jobName: data.jobName,
+                dockerImage: data.dockerImage,
+                dockerTag: data.dockerTag
+              })
               break
-            case 'stopComputeJob':
+            case 'runJob':
+              await vscode.commands.executeCommand('ocean-protocol.runJob', {
+                jobName: data.jobName,
+                dockerImage: data.dockerImage,
+                dockerTag: data.dockerTag
+              })
+              break
+            case 'stopJob':
               await vscode.commands.executeCommand(
                 'ocean-protocol.stopComputeJob',
-                data.authToken
+                this.config?.authToken
               )
+              break
+            case 'getJobs':
+              await vscode.commands.executeCommand('ocean-protocol.loadJobs')
+              break
+            case 'selectJob':
+              await vscode.commands.executeCommand('ocean-protocol.selectJob', data.jobId)
               break
             case 'downloadResults':
               await vscode.commands.executeCommand(
                 'ocean-protocol.downloadResults',
-                data.jobId
+                data.jobId,
+                data.outputsURL
               )
               break
-            case 'openResultsFolder':
-              vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(data.path))
+            case 'openStorage':
+              await vscode.commands.executeCommand('ocean-protocol.openStoragePanel')
               break
-            case 'copyToClipboard':
-              vscode.env.clipboard.writeText(data.text)
+            case 'connect':
+              await vscode.commands.executeCommand('ocean-protocol.openConnectUrl')
+              break
+            case 'openConfigureJob':
+              await vscode.commands.executeCommand('ocean-protocol.openConfigureJob')
+              break
+            case 'showLogs':
+              await vscode.commands.executeCommand('ocean-protocol.showLogs')
+              break
+            case 'viewJobLogs':
+              await vscode.commands.executeCommand('ocean-protocol.viewJobLogs', data.jobId)
               break
             case 'openExternalUrl':
               vscode.env.openExternal(vscode.Uri.parse(data.url))
               break
-            case 'openStoragePanel':
-              vscode.commands.executeCommand('ocean-protocol.openStoragePanel')
+            case 'copyToClipboard':
+              vscode.env.clipboard.writeText(data.text)
               break
-            case 'openBrowser':
-              this.trackFn?.('configure_compute_clicked')
-              const appName = vscode.env?.appName || 'vscode'
-              const multiaddrsParam = (
-                this.config?.multiaddresses ?? [this.defaultMultiaddr]
-              ).join(',')
-              vscode.env.openExternal(
-                vscode.Uri.parse(
-                  `${data.url}?ide=${appName?.toLowerCase()}&isFreeCompute=${this.config?.isFreeCompute || true}&multiaddresses=${encodeURIComponent(multiaddrsParam)}`
-                )
-              )
+            case 'getDefaultEnv':
+              await vscode.commands.executeCommand('ocean-protocol.loadDefaultEnv')
+              break
+            case 'getState':
+              if (this.config) {
+                webviewView.webview.postMessage(this._buildStateUpdate(this.config))
+              }
               break
           }
         } catch (error) {
@@ -311,781 +344,1090 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _getHtmlForWebview(webview: vscode.Webview) {
-    return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'unsafe-inline';">
-        <title>Ocean Orchestrator</title>
-        <style>
-          body { 
-            padding: 0;
-            margin: 0;
-            color: var(--vscode-foreground);
-            background-color: var(--vscode-sideBar-background);
-            font-family: var(--vscode-font-family);
-            font-size: var(--vscode-font-size);
+    const defaultMultiaddrEscaped = this.defaultMultiaddr.replace(/"/g, '\\"')
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>Ocean Orchestrator</title>
+  <style>
+    ${webviewCss()}
+
+    /* -----------------------------------------------------------------------
+       Sidebar-specific overrides (300px column context)
+    ----------------------------------------------------------------------- */
+    body {
+      background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+      padding: var(--sp-3) var(--sp-4);
+    }
+
+    /* Status line */
+    #statusLine {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: var(--sp-3);
+    }
+    #statusLine .status-dot {
+      flex-shrink: 0;
+    }
+    #statusLine .status-text-wrap {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #refreshBtn {
+      flex-shrink: 0;
+      background: transparent;
+      border: none;
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 17px;
+      line-height: 1;
+      opacity: 0.6;
+      transition: opacity var(--transition), background var(--transition);
+    }
+    #refreshBtn:hover:not(:disabled) {
+      opacity: 1;
+      background: var(--vscode-list-hoverBackground);
+    }
+    #refreshBtn:disabled {
+      cursor: not-allowed;
+      opacity: 0.35;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    #refreshBtn.spinning {
+      animation: spin 0.8s linear infinite;
+      opacity: 0.5;
+    }
+
+    /* Project section */
+    .field {
+      margin-bottom: var(--sp-2);
+    }
+    .field label {
+      display: block;
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: var(--sp-1);
+    }
+    .field input {
+      width: 100%;
+    }
+    #dockerFields {
+      display: none;
+    }
+    #dockerFields.visible {
+      display: block;
+    }
+    .project-buttons {
+      display: flex;
+      gap: var(--sp-2);
+      margin-top: var(--sp-1);
+    }
+    .project-buttons .btn {
+      flex: 1;
+    }
+    #projectPath {
+      display: block;
+      width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--vscode-editor-font-family);
+      font-size: var(--fs-xs);
+      color: var(--vscode-foreground);
+      margin: var(--sp-1) 0;
+    }
+    #projectPath.empty {
+      color: var(--vscode-descriptionForeground);
+      font-family: var(--vscode-font-family);
+    }
+
+    /* Env summary card — connected-paid only */
+    #envCard {
+      display: none;
+      margin-bottom: var(--sp-3);
+    }
+    #envCard.visible {
+      display: block;
+    }
+    .env-card-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-2);
+    }
+    #configureJobBtn {
+      padding: 2px var(--sp-2);
+      flex: 0 0 auto;
+    }
+    .env-label {
+      font-weight: 600;
+      font-size: var(--fs-sm);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .env-resources {
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+      margin-top: var(--sp-1);
+    }
+
+    /* Primary run button */
+    #runBtn {
+      width: 100%;
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      padding: var(--sp-2) var(--sp-3);
+      margin-bottom: var(--sp-4);
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-family: inherit;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      transition: background var(--transition), opacity var(--transition);
+    }
+    #runBtn:hover:not(:disabled) {
+      background: var(--vscode-button-hoverBackground);
+    }
+    #runBtn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    #runBtn.btn-danger {
+      background: var(--vscode-errorForeground);
+      color: var(--vscode-editor-background);
+    }
+    #runBtn.btn-danger:hover:not(:disabled) {
+      opacity: 0.85;
+    }
+
+    /* Timer */
+    #elapsedTimer {
+      display: none;
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+      text-align: center;
+      margin-top: calc(-1 * var(--sp-3));
+      margin-bottom: var(--sp-3);
+    }
+
+    /* Jobs list */
+    .jobs-list {
+      margin-bottom: var(--sp-3);
+    }
+    .job-row {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-1) var(--sp-2);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      border-left: 3px solid transparent;
+    }
+    .job-row:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
+    .job-row.selected {
+      border-left-color: var(--vscode-focusBorder);
+      background: var(--vscode-list-hoverBackground);
+    }
+    .job-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--fs-xs);
+    }
+    .job-time {
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+      flex-shrink: 0;
+    }
+    .no-jobs {
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+      padding: var(--sp-2);
+      text-align: center;
+    }
+
+    /* Download results: primary style, matching the Run button */
+    #downloadBtn {
+      width: 100%;
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--radius-sm);
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-family: inherit;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      transition: background var(--transition), opacity var(--transition);
+    }
+    #downloadBtn:hover:not(:disabled) {
+      background: var(--vscode-button-hoverBackground);
+    }
+    #downloadBtn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    /* Job action buttons (under run button) */
+    #jobActions {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+      margin-top: calc(-1 * var(--sp-3));
+      margin-bottom: var(--sp-3);
+    }
+    .job-act-btn {
+      width: 100%;
+      font-size: var(--fs-xs);
+      padding: var(--sp-1) var(--sp-2);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--vscode-panel-border);
+      cursor: pointer;
+      font-family: inherit;
+      background: transparent;
+      color: var(--vscode-foreground);
+      text-align: left;
+      transition: background var(--transition), opacity var(--transition);
+    }
+    .job-act-btn:hover:not(:disabled) {
+      background: var(--vscode-list-hoverBackground);
+    }
+    .job-act-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Footer links */
+    .footer-links {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+      margin-top: var(--sp-3);
+    }
+    .footer-links a {
+      font-size: var(--fs-xs);
+      color: var(--vscode-textLink-foreground);
+      text-decoration: none;
+    }
+    .footer-links a:hover {
+      text-decoration: underline;
+    }
+
+    .section-sep {
+      border-top: 1px solid var(--vscode-panel-border);
+      padding-top: 12px;
+      margin-top: 4px;
+    }
+    .section-gap {
+      margin-bottom: var(--sp-4);
+    }
+    .env-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: var(--sp-2);
+    }
+    .env-metric-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .env-metric-val {
+      font-size: 13px;
+      color: var(--vscode-foreground);
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    .env-metric-lbl {
+      font-size: 9px;
+      color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .env-node-sub {
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+      margin-top: var(--sp-1);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- STATUS LINE -->
+  <div id="statusLine">
+    <span class="status-dot running" id="statusDot"></span>
+    <span class="status-text-wrap" id="statusText">Connecting…</span>
+    <button id="refreshBtn" title="Refresh">&#8635;</button>
+  </div>
+
+  <!-- PROJECT -->
+  <div class="section-gap section-sep">
+    <span class="label-section">Project</span>
+    <div class="field">
+      <label for="jobNameInput">Job name</label>
+      <input type="text" id="jobNameInput" placeholder="generating…">
+    </div>
+    <div class="project-buttons">
+      <button class="btn btn-sm btn-ghost" id="selectFolderBtn" title="Select project">Select Project</button>
+      <button class="btn btn-sm btn-ghost" id="newFolderBtn" title="New project">New Project</button>
+    </div>
+    <div id="projectPath" class="empty">No folder selected</div>
+    <div id="dockerFields">
+      <div class="field">
+        <label for="dockerImageInput">Docker image</label>
+        <input type="text" id="dockerImageInput" placeholder="e.g. python">
+      </div>
+      <div class="field">
+        <label for="dockerTagInput">Docker tag</label>
+        <input type="text" id="dockerTagInput" placeholder="e.g. 3.11-slim">
+      </div>
+    </div>
+  </div>
+
+  <!-- DEFAULT ENV CARD (default-free mode only) -->
+  <div id="defaultEnvCard" class="card section-gap" style="display:none;">
+    <div id="defaultEnvBody">
+      <span class="text-xs">Checking default node...</span>
+    </div>
+  </div>
+
+  <!-- ENV SUMMARY CARD (connected-paid, no job selected) -->
+  <div id="envCard" class="card section-gap">
+    <div class="env-card-row">
+      <span id="envLabel" class="env-label">Selected environment</span>
+      <button class="btn btn-sm btn-ghost" id="configureJobBtn">Configure &#9881;</button>
+    </div>
+    <div class="env-resources" id="envResources"></div>
+    <div id="envCost" class="text-xs" style="margin-top: var(--sp-2);"></div>
+    <div id="envBalance" class="text-xs"></div>
+  </div>
+
+  <!-- PRIMARY RUN BUTTON -->
+  <button id="runBtn" disabled>&#9654; Run free test job</button>
+  <div id="elapsedTimer">0:00 elapsed</div>
+
+  <!-- JOB ACTION BUTTONS (operate on selected job) -->
+  <div id="jobActions">
+    <button id="downloadBtn" disabled>Download results</button>
+  </div>
+
+  <!-- JOBS -->
+  <div class="section-gap section-sep">
+    <span class="label-section">Jobs</span>
+    <div class="jobs-list" id="jobsList">
+      <div class="no-jobs">No jobs yet</div>
+    </div>
+  </div>
+
+  <!-- FOOTER LINKS -->
+  <div class="footer-links">
+    <a href="#" id="connectLink" style="display:none;">Connect for paid environments &#8599;</a>
+    <a href="#" id="storageLink">Manage storage &#8599;</a>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    const defaultMultiaddr = "${defaultMultiaddrEscaped}";
+
+    // -------------------------------------------------------------------------
+    // State
+    // -------------------------------------------------------------------------
+    let mode = 'default-free'; // 'default-free' | 'connected-paid'
+    let connected = false;
+    let nodeId = null;
+    let projectPath = null;
+    let algorithmPath = null;
+    let resultsFolderPath = null;
+    let projectType = null; // Language enum value; 'Docker Image' => show docker fields
+    // The Dockerfile project type — docker image/tag fields are shown only for it.
+    const DOCKER_PROJECT_TYPE = '${Language.DOCKER_IMAGE}';
+    let isRunning = false;
+    let elapsedSeconds = 0;
+    let runningJobId = null;
+    let timerInterval = null;
+    let jobs = [];
+    let selectedJobId = null;
+    // Default env capabilities (default-free mode)
+    let defaultEnv = null; // null = loading, false = error, object = loaded
+    let defaultEnvRequested = false;
+    // Refresh / retry state
+    let refreshInFlight = false;       // true while a manual/auto refresh is pending
+    let refreshTimeoutId = null;       // safety timeout handle
+    // Continuous retry loop for default env
+    let retryIntervalId = null;        // interval handle for 5s retry loop
+    // Connection status: 'connecting' | 'connected' | 'failed'
+    let connStatus = 'connecting';
+    // Connected-paid state
+    let jobSummary = null;
+    let walletAddress = null;
+    let connectedFree = false;
+    let envInfo = {};
+
+    // -------------------------------------------------------------------------
+    // DOM refs
+    // -------------------------------------------------------------------------
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const defaultEnvCard = document.getElementById('defaultEnvCard');
+    const defaultEnvBody = document.getElementById('defaultEnvBody');
+    const projectPathEl = document.getElementById('projectPath');
+    const jobNameInput = document.getElementById('jobNameInput');
+    const dockerFields = document.getElementById('dockerFields');
+    const dockerImageInput = document.getElementById('dockerImageInput');
+    const dockerTagInput = document.getElementById('dockerTagInput');
+    const envCard = document.getElementById('envCard');
+    const envResources = document.getElementById('envResources');
+    const envCostEl = document.getElementById('envCost');
+    const envBalanceEl = document.getElementById('envBalance');
+    const runBtn = document.getElementById('runBtn');
+    const elapsedTimerEl = document.getElementById('elapsedTimer');
+    const jobsListEl = document.getElementById('jobsList');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const connectLink = document.getElementById('connectLink');
+    const storageLink = document.getElementById('storageLink');
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+    function fmtElapsed(secs) {
+      const m = Math.floor(secs / 60);
+      const s = String(secs % 60).padStart(2, '0');
+      return m + ':' + s;
+    }
+
+    // Local jobs store createdAt in ms (Date.now()); incentive jobs use epoch
+    // seconds. Normalize everything to ms so formatting + sorting are consistent.
+    function toMs(ts) {
+      if (!ts || isNaN(ts)) return 0;
+      return ts < 1e12 ? ts * 1000 : ts;
+    }
+
+    function shortId(id) {
+      if (!id) return '';
+      return id.length > 24 ? id.slice(0, 10) + '…' + id.slice(-6) : id;
+    }
+
+    function fmtTime(ts) {
+      const ms = toMs(ts);
+      if (!ms) return '';
+      const d = new Date(ms);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function statusClass(s) {
+      if (!s) return 'stopped';
+      switch (s.toLowerCase()) {
+        case 'running': return 'running';
+        case 'completed': return 'completed';
+        case 'failed': return 'failed';
+        case 'stopped': return 'stopped';
+        default: return 'queued';
+      }
+    }
+
+    function fmtGB(gb) {
+      if (gb == null) return null;
+      return Math.round(gb) + ' GB';
+    }
+
+    function shortPeerId(id) {
+      if (!id) return '';
+      if (id.length <= 12) return id;
+      return id.slice(0, 6) + '…' + id.slice(-4);
+    }
+
+    // -------------------------------------------------------------------------
+    // Refresh helpers
+    // -------------------------------------------------------------------------
+    function setRefreshInFlight(inFlight) {
+      refreshInFlight = inFlight;
+      refreshBtn.disabled = inFlight;
+      if (inFlight) {
+        refreshBtn.classList.add('spinning');
+        // Safety timeout — re-enable after 8s even if no response arrives
+        clearTimeout(refreshTimeoutId);
+        refreshTimeoutId = setTimeout(() => {
+          setRefreshInFlight(false);
+        }, 8000);
+      } else {
+        refreshBtn.classList.remove('spinning');
+        clearTimeout(refreshTimeoutId);
+        refreshTimeoutId = null;
+      }
+    }
+
+    function startRetryLoop() {
+      // Guard: only one interval running at a time
+      if (retryIntervalId !== null) return;
+      retryIntervalId = setInterval(() => {
+        if (mode !== 'default-free' || (defaultEnv && defaultEnv !== false)) {
+          stopRetryLoop();
+          return;
+        }
+        connStatus = 'connecting';
+        renderStatus();
+        vscode.postMessage({ type: 'getDefaultEnv' });
+      }, 5000);
+    }
+
+    function stopRetryLoop() {
+      if (retryIntervalId !== null) {
+        clearInterval(retryIntervalId);
+        retryIntervalId = null;
+      }
+    }
+
+    function doRefresh() {
+      setRefreshInFlight(true);
+      if (mode === 'default-free') {
+        defaultEnv = null; // show "Checking…" during refresh
+        connStatus = 'connecting';
+        renderDefaultEnvCard();
+        renderStatus();
+        vscode.postMessage({ type: 'getDefaultEnv' });
+      }
+      vscode.postMessage({ type: 'getJobs' });
+    }
+
+    // -------------------------------------------------------------------------
+    // Render
+    // -------------------------------------------------------------------------
+    function shortAddress(addr) {
+      if (!addr) return '';
+      return addr.slice(0, 6) + '…' + addr.slice(-4);
+    }
+
+    function renderStatus() {
+      // Top status line reflects ONLY node connection + web3 address.
+      // Job status never changes this line.
+      if (walletAddress) {
+        statusDot.className = 'status-dot completed'; // green
+        statusText.textContent = walletAddress.slice(0, 6) + '…' + walletAddress.slice(-4);
+        return;
+      }
+      // No wallet — reflect default-node connection state
+      switch (connStatus) {
+        case 'connecting':
+          statusDot.className = 'status-dot running'; // blue + animated
+          statusText.textContent = 'Connecting…';
+          break;
+        case 'connected':
+          statusDot.className = 'status-dot completed'; // green
+          statusText.textContent = 'Connected';
+          break;
+        case 'failed':
+          statusDot.className = 'status-dot failed'; // red
+          statusText.textContent = 'Failed to connect';
+          break;
+        default:
+          statusDot.className = 'status-dot stopped';
+          statusText.textContent = 'Not connected';
+      }
+    }
+
+    function renderDefaultEnvCard() {
+      if (mode !== 'default-free') {
+        defaultEnvCard.style.display = 'none';
+        return;
+      }
+      defaultEnvCard.style.display = 'block';
+      if (defaultEnv === null) {
+        defaultEnvBody.innerHTML = '<span class="text-xs">Checking default node...</span>';
+        return;
+      }
+      if (defaultEnv === false) {
+        defaultEnvBody.innerHTML =
+          '<div style="display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;">' +
+          '<span class="text-xs">Default node unavailable</span>' +
+          '<button id="retryEnvBtn" class="btn btn-sm btn-ghost" style="padding:1px var(--sp-2);">Retry now</button>' +
+          '</div>';
+        const retryBtn = document.getElementById('retryEnvBtn');
+        if (retryBtn) {
+          retryBtn.addEventListener('click', () => {
+            // Immediate retry; the 5s loop continues independently
+            defaultEnv = null;
+            connStatus = 'connecting';
+            renderDefaultEnvCard();
+            renderStatus();
+            setRefreshInFlight(true);
+            vscode.postMessage({ type: 'getDefaultEnv' });
+          });
+        }
+        return;
+      }
+      // Build metric grid
+      const nodeLabel = shortPeerId(defaultEnv.nodeId) || 'default';
+      const platformStr = (defaultEnv.os || defaultEnv.arch)
+        ? ((defaultEnv.os || '') + (defaultEnv.os && defaultEnv.arch ? '/' : '') + (defaultEnv.arch || ''))
+        : '';
+
+      let cpuVal = null, ramVal = null, diskVal = null, gpuVal = null;
+      if (defaultEnv.resources && defaultEnv.resources.length > 0) {
+        for (const r of defaultEnv.resources) {
+          const val = r.available != null ? r.available : r.max;
+          if (r.id && r.id.includes('cpu')) cpuVal = val;
+          else if (r.id && r.id.includes('ram')) ramVal = val;
+          else if (r.id && r.id.includes('disk')) diskVal = val;
+          // Anything else is a GPU (GPU resource ids are model/uuid, not 'gpu')
+          else if (r.id) gpuVal = (gpuVal || 0) + val;
+        }
+      }
+
+      let maxRunStr = null;
+      if (defaultEnv.maxJobDuration != null) {
+        const s = defaultEnv.maxJobDuration;
+        if (s >= 3600) maxRunStr = Math.round(s / 3600) + 'h';
+        else if (s >= 60) maxRunStr = Math.round(s / 60) + 'm';
+        else maxRunStr = s + 's';
+      }
+
+      const subLine = [nodeLabel, platformStr].filter(Boolean).join(' · ');
+
+      let cells = '';
+      if (cpuVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + cpuVal + '</div><div class="env-metric-lbl">CPU</div></div>';
+      if (ramVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + (fmtGB(ramVal) || ramVal) + '</div><div class="env-metric-lbl">RAM</div></div>';
+      if (diskVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + (fmtGB(diskVal) || diskVal) + '</div><div class="env-metric-lbl">DISK</div></div>';
+      if (gpuVal != null && gpuVal > 0) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + gpuVal + '</div><div class="env-metric-lbl">GPU</div></div>';
+      if (maxRunStr != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + maxRunStr + '</div><div class="env-metric-lbl">MAX RUN</div></div>';
+
+      let html = '<span class="label-section">SELECTED ENVIRONMENT</span>';
+      if (subLine) html += '<div class="env-node-sub">' + subLine + '</div>';
+      if (cells) html += '<div class="env-metric-grid">' + cells + '</div>';
+      defaultEnvBody.innerHTML = html;
+    }
+
+    function renderProject() {
+      if (projectPath) {
+        // Show the tail (…/parent/folder) so the project folder name is visible;
+        // full path on hover.
+        const segs = projectPath.split('/').filter(Boolean);
+        const tail = segs.length > 2 ? '…/' + segs.slice(-2).join('/') : projectPath;
+        projectPathEl.textContent = tail;
+        projectPathEl.classList.remove('empty');
+        projectPathEl.title = projectPath;
+      } else {
+        projectPathEl.textContent = 'No folder selected';
+        projectPathEl.classList.add('empty');
+        projectPathEl.removeAttribute('title');
+      }
+    }
+
+    function renderDockerFields() {
+      if (projectType === DOCKER_PROJECT_TYPE) {
+        dockerFields.classList.add('visible');
+      } else {
+        dockerFields.classList.remove('visible');
+      }
+    }
+
+    function renderEnvCard() {
+      if (mode === 'connected-paid' && connected) {
+        envCard.classList.add('visible');
+        let cpuVal = null, ramVal = null, diskVal = null, gpuVal = null;
+        if (jobSummary?.resources && jobSummary.resources.length > 0) {
+          for (const r of jobSummary.resources) {
+            if (!r.id) continue;
+            if (r.id.includes('cpu')) cpuVal = r.amount;
+            else if (r.id.includes('ram')) ramVal = r.amount;
+            else if (r.id.includes('disk')) diskVal = r.amount;
+            // Anything else is a GPU (GPU resource ids are model/uuid, not 'gpu')
+            else gpuVal = (gpuVal || 0) + r.amount;
           }
-          .container {
-            padding: 0 20px;
+        }
+        let maxRunStr = null;
+        if (jobSummary?.duration) {
+          const s = Number(jobSummary.duration);
+          if (s >= 3600) maxRunStr = Math.round(s / 3600) + 'h';
+          else if (s >= 60) maxRunStr = Math.round(s / 60) + 'm';
+          else maxRunStr = s + 's';
+        }
+        let cells = '';
+        if (cpuVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + cpuVal + '</div><div class="env-metric-lbl">CPU</div></div>';
+        if (ramVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + (fmtGB(ramVal) || ramVal) + '</div><div class="env-metric-lbl">RAM</div></div>';
+        if (diskVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + (fmtGB(diskVal) || diskVal) + '</div><div class="env-metric-lbl">DISK</div></div>';
+        if (gpuVal != null && gpuVal > 0) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + gpuVal + '</div><div class="env-metric-lbl">GPU</div></div>';
+        if (maxRunStr != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + maxRunStr + '</div><div class="env-metric-lbl">MAX RUN</div></div>';
+        envResources.innerHTML = cells ? '<div class="env-metric-grid">' + cells + '</div>' : '';
+
+        const sym = envInfo.symbol || '';
+        envCostEl.textContent =
+          envInfo.cost != null ? 'Est. cost ≈ ' + envInfo.cost.toFixed(4) + ' ' + sym + ' / run' : '';
+        envBalanceEl.textContent =
+          envInfo.balance != null ? 'Escrow ' + envInfo.balance.toFixed(4) + ' ' + sym : '';
+      } else {
+        envCard.classList.remove('visible');
+      }
+    }
+
+    function renderJobActions() {
+      const selectedJob = selectedJobId ? jobs.find((j) => j.jobId === selectedJobId) : null;
+      const effStatus = selectedJob
+        ? (selectedJob.jobId === runningJobId ? 'Running' : (selectedJob.status || 'Queued'))
+        : null;
+
+      // Download: enabled only when the selected job is Completed or has outputsURL.
+      // (Stop lives on the primary Run button, in place, while a job runs.)
+      const canDownload = selectedJob && (effStatus === 'Completed' || !!selectedJob.outputsURL);
+      downloadBtn.disabled = !canDownload;
+    }
+
+    function renderRunBtn() {
+      const hasProject = !!projectPath;
+      if (runningJobId) {
+        // A job is running — the primary button becomes Stop, in place.
+        runBtn.textContent = '\\u25A0 Stop job';
+        runBtn.classList.add('btn-danger');
+        runBtn.disabled = false;
+      } else {
+        runBtn.classList.remove('btn-danger');
+        runBtn.textContent =
+          mode === 'connected-paid'
+            ? (connectedFree ? '\\u25BA Run free job' : '\\u25BA Run job')
+            : '\\u25BA Run free test job';
+        runBtn.disabled = !hasProject;
+      }
+    }
+
+    function renderTimer() {
+      if (isRunning) {
+        elapsedTimerEl.style.display = 'block';
+        elapsedTimerEl.textContent = fmtElapsed(elapsedSeconds) + ' elapsed';
+      } else {
+        elapsedTimerEl.style.display = 'none';
+      }
+    }
+
+    function renderJobs() {
+      if (!jobs || jobs.length === 0) {
+        jobsListEl.innerHTML = '<div class="no-jobs">No jobs yet</div>';
+        return;
+      }
+      // The actively-running job (this session) shows as Running even before the
+      // incentive backend reflects it.
+      const effStatus = (j) => (j.jobId === runningJobId ? 'Running' : (j.status || 'Queued'));
+      // Running job pinned top
+      const sorted = [...jobs].sort((a, b) => {
+        const ar = effStatus(a) === 'Running', br = effStatus(b) === 'Running';
+        if (ar && !br) return -1;
+        if (br && !ar) return 1;
+        return toMs(b.createdAt) - toMs(a.createdAt);
+      });
+      jobsListEl.innerHTML = sorted.map((j) => {
+        const sel = j.jobId === selectedJobId ? ' selected' : '';
+        const status = effStatus(j);
+        const sc = statusClass(status);
+        const shortName = j.name && j.name !== j.jobId
+          ? j.name
+          : j.jobId.slice(0, 8) + '…';
+        const timeStr = fmtTime(j.finishedAt || j.createdAt);
+        return (
+          '<div class="job-row' + sel + '" data-id="' + j.jobId + '">' +
+          '<span class="status-dot ' + sc + '"></span>' +
+          '<span class="job-name" title="' + (j.name || j.jobId) + '">' + shortName + '</span>' +
+          '<span class="status-badge ' + sc + '">' + status + '</span>' +
+          '<span class="job-time">' + timeStr + '</span>' +
+          '</div>'
+        );
+      }).join('');
+
+      // Attach click handlers: select job and switch logs to that job
+      jobsListEl.querySelectorAll('.job-row').forEach((el) => {
+        el.addEventListener('click', () => {
+          const id = el.getAttribute('data-id');
+          selectedJobId = id;
+          renderJobActions();
+          renderJobs();
+          vscode.postMessage({ type: 'selectJob', jobId: id });
+          vscode.postMessage({ type: 'viewJobLogs', jobId: id });
+        });
+      });
+    }
+
+    function renderFooter() {
+      connectLink.style.display = mode === 'default-free' ? 'block' : 'none';
+    }
+
+    function renderAll() {
+      renderStatus();
+      renderDefaultEnvCard();
+      renderProject();
+      renderDockerFields();
+      renderEnvCard();
+      renderJobActions();
+      renderRunBtn();
+      renderTimer();
+      renderJobs();
+      renderFooter();
+    }
+
+    // -------------------------------------------------------------------------
+    // Timer management
+    // -------------------------------------------------------------------------
+    function startTimer() {
+      elapsedSeconds = 0;
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        elapsedSeconds++;
+        renderTimer();
+      }, 1000);
+    }
+
+    function stopTimer() {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+
+    // -------------------------------------------------------------------------
+    // Event handlers
+    // -------------------------------------------------------------------------
+    refreshBtn.addEventListener('click', () => {
+      if (!refreshInFlight) {
+        doRefresh();
+      }
+    });
+
+    document.getElementById('selectFolderBtn').addEventListener('click', () => {
+      vscode.postMessage({ type: 'selectProjectFolder' });
+    });
+
+    document.getElementById('newFolderBtn').addEventListener('click', () => {
+      vscode.postMessage({ type: 'createNewProjectFolder' });
+    });
+
+    document.getElementById('configureJobBtn').addEventListener('click', () => {
+      vscode.postMessage({ type: 'openConfigureJob' });
+    });
+
+    runBtn.addEventListener('click', () => {
+      if (runningJobId) {
+        vscode.postMessage({ type: 'stopJob' });
+        return;
+      }
+      const showDocker = projectType === DOCKER_PROJECT_TYPE;
+      const runMsg = {
+        type: mode === 'connected-paid' ? 'runJob' : 'runFreeJob',
+        jobName: jobNameInput.value.trim() || undefined,
+        dockerImage: showDocker ? (dockerImageInput.value.trim() || undefined) : undefined,
+        dockerTag: showDocker ? (dockerTagInput.value.trim() || undefined) : undefined
+      };
+      vscode.postMessage(runMsg);
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!selectedJobId) return;
+      const selectedJob = jobs.find((j) => j.jobId === selectedJobId);
+      vscode.postMessage({
+        type: 'downloadResults',
+        jobId: selectedJobId,
+        outputsURL: selectedJob?.outputsURL || undefined
+      });
+    });
+
+    connectLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      vscode.postMessage({ type: 'connect' });
+    });
+
+    storageLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      vscode.postMessage({ type: 'openStorage' });
+    });
+
+    // -------------------------------------------------------------------------
+    // Message handler
+    // -------------------------------------------------------------------------
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      console.log('Sidebar received:', msg.type);
+
+      switch (msg.type) {
+        case 'stateUpdate':
+          mode = msg.mode || 'default-free';
+          connected = msg.status?.connected || false;
+          nodeId = msg.status?.nodeId || null;
+          walletAddress = msg.status?.address || null;
+          connectedFree = !!msg.status?.isFree;
+          jobSummary = msg.jobSummary || null;
+          if (msg.project) {
+            projectPath = msg.project.folderPath || projectPath;
           }
-          input, button {
-            margin: 5px 0;
-            width: 100%;
-            padding: 8px;
-            box-sizing: border-box;
-            border: 1px solid var(--vscode-input-border);
-            background-color: var(--vscode-input-background);
-            color: var(--vscode-input-foreground);
-            font-family: var(--vscode-font-family);
-            font-size: var(--vscode-font-size);
+          // Stop retry loop when switching to connected-paid
+          if (mode === 'connected-paid') {
+            stopRetryLoop();
+            connStatus = 'connected';
           }
-          button {
-            background-color: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
-            border: none;
-            cursor: pointer;
+          renderAll();
+          // Request job refresh on state change
+          vscode.postMessage({ type: 'getJobs' });
+          // Fetch default env capabilities when in default-free mode
+          if (mode === 'default-free' && !defaultEnvRequested) {
+            defaultEnvRequested = true;
+            connStatus = 'connecting';
+            vscode.postMessage({ type: 'getDefaultEnv' });
           }
-          button:hover {
-            background-color: var(--vscode-button-hoverBackground);
+          break;
+
+        case 'defaultEnvLoaded':
+          if (msg.error) {
+            defaultEnv = false;
+            connStatus = 'failed';
+            setRefreshInFlight(false);
+            renderStatus();
+            renderDefaultEnvCard();
+            // Start the 5s retry loop (no-op if already running)
+            if (mode === 'default-free') {
+              startRetryLoop();
+            }
+          } else {
+            defaultEnv = msg.env || false;
+            connStatus = 'connected';
+            setRefreshInFlight(false);
+            // Stop the retry loop — env loaded successfully
+            stopRetryLoop();
+            renderStatus();
+            renderDefaultEnvCard();
           }
-          label {
-            margin-top: 10px;
-            display: block;
+          break;
+
+        case 'defaultJobName':
+          // Prefill only when the user hasn't typed anything yet.
+          if (!jobNameInput.value.trim()) {
+            jobNameInput.value = msg.name || '';
           }
-          .selectedFile {
-            margin-top: 5px;
+          break;
+
+        case 'projectFolder':
+          projectPath = msg.path;
+          projectType = msg.projectType || null;
+          algorithmPath = msg.algorithmPath || (msg.path + '/' + msg.algorithmFileName);
+          resultsFolderPath = msg.path + '/results';
+          renderProject();
+          renderDockerFields();
+          renderRunBtn();
+          break;
+
+        case 'projectCreated':
+          projectPath = msg.projectPath;
+          projectType = msg.language || null;
+          algorithmPath = msg.algorithmPath;
+          resultsFolderPath = msg.resultsPath;
+          renderProject();
+          renderDockerFields();
+          renderRunBtn();
+          break;
+
+        case 'envInfo':
+          envInfo = { cost: msg.cost, balance: msg.balance, symbol: msg.symbol };
+          renderEnvCard();
+          break;
+
+        case 'jobsLoaded':
+          jobs = msg.jobs || [];
+          selectedJobId = msg.selectedJobId !== undefined ? msg.selectedJobId : selectedJobId;
+          // In connected-paid mode the env card is hidden; jobs response signals refresh done
+          if (mode === 'connected-paid' && refreshInFlight) {
+            setRefreshInFlight(false);
           }
-          .filePath {
-            font-style: italic;
-            display: block;
-            margin-top: 5px;
-            color: var(--vscode-foreground);
+          renderJobActions();
+          renderJobs();
+          break;
+
+        case 'jobLoading':
+          // Disable run btn while submitting
+          runBtn.disabled = true;
+          break;
+
+        case 'jobStarted':
+          isRunning = true;
+          runningJobId = msg.jobId || null;
+          // Auto-select the started job so Stop/logs appear immediately
+          if (runningJobId) {
+            selectedJobId = runningJobId;
+            vscode.postMessage({ type: 'selectJob', jobId: runningJobId });
+            vscode.postMessage({ type: 'viewJobLogs', jobId: runningJobId });
           }
-          .filePrefix {
-            font-style: normal;
-            font-weight: bold;
-            font-size: 1.1em;
-            display: block;
-            color: var(--vscode-descriptionForeground);
+          startTimer();
+          renderStatus();
+          renderRunBtn();
+          renderTimer();
+          // Refresh so the just-started job appears immediately
+          vscode.postMessage({ type: 'getJobs' });
+          break;
+
+        case 'jobRunning':
+          isRunning = true;
+          if (msg.elapsed != null) {
+            elapsedSeconds = msg.elapsed;
+            renderTimer();
           }
-          #selectedProjectPath {
-            margin: 10px 0;
-            padding: 10px;
-            background-color: var(--vscode-editor-background);
-            border: 1px solid var(--vscode-input-border);
-            border-radius: 4px;
-          }
-          .currentFile {
-            margin-top: 5px;
-            font-style: normal;
-          }
-          .section {
-            margin-bottom: 10px;
-          }
-          .section-header {
-            background-color: var(--vscode-sideBarSectionHeader-background);
-            color: var(--vscode-sideBarSectionHeader-foreground);
-            padding: 10px 20px;
-            cursor: pointer;
-            user-select: none;
-            font-weight: bold;
-            border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
-            border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
-            display: flex;
-            align-items: center;
-          }
-          .section-content {
-            padding: 10px 0;
-            display: none;
-          }
-          .section-content.active {
-            display: block;
-          }
-          .section-header:hover {
-            background-color: var(--vscode-sideBarSectionHeader-hoverBackground);
-          }
-          .chevron {
-            margin-right: 5px;
-            transition: transform 0.3s ease;
-          }
-          .section-header.active .chevron {
-            transform: rotate(90deg);
-          }
-          .compute-container {
-            padding: 15px 20px;
-            border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
-          }
-          #startComputeBtn {
-            margin: 5px 0;
-          }
-          #configureCompute {
-            background-color: var(--vscode-button-secondaryBackground);
-            color: var(--vscode-button-secondaryForeground);
-            border: 1px solid var(--vscode-button-border);
-            cursor: pointer;
-            padding: 8px;
-            margin: 5px 0;
-            width: 100%;
-            font-size: var(--vscode-font-size);
-            text-decoration: none;
-          }
-          #configureCompute:hover {
-            background-color: var(--vscode-button-secondaryHoverBackground);
-          }
-          #datasetInput {
-            width: 100%;
-            padding: 8px;
-          }
-          #mountedBadge {
-            font-size: 0.85em;
-            color: var(--vscode-descriptionForeground);
-            margin: 4px 0 6px;
-            word-break: break-all;
-          }
-          #mountedBadge.has-mounts {
-            color: var(--vscode-foreground);
-          }
-          #outputBucketBadge {
-            font-size: 0.85em;
-            color: var(--vscode-foreground);
-            margin: 0 0 6px;
-            word-break: break-all;
-            display: none;
-          }
-          #stopComputeBtn {
-            margin: 5px 0;
-          }
-          .environment-section {
-            margin: 6px 0;
-          }
-          .environment-select {
-            width: 100%;
-            padding: 8px;
-            margin: 5px 0;
-            background-color: var(--vscode-dropdown-background);
-            color: var(--vscode-dropdown-foreground);
-            border: 1px solid var(--vscode-dropdown-border);
-          }
-          .environment-details {
-            margin-top: 6px;
-            padding: 10px;
-            background-color: var(--vscode-editor-background);
-            border: 1px solid var(--vscode-input-border);
-            border-radius: 4px;
-            font-size: 0.9em;
-            display: none;
-          }
-          .environment-details.active {
-            display: block;
-          }
-          .environment-details p {
-            margin: 5px 0;
-          }
-          .environment-details .label {
-            font-weight: bold;
-            color: var(--vscode-descriptionForeground);
-          }
-          .env-loading {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: var(--vscode-descriptionForeground);
-          }
-          .env-loading-spinner {
-            width: 18px;
-            height: 18px;
-            border: 2px solid var(--vscode-input-border);
-            border-top-color: var(--vscode-focusBorder);
-            border-radius: 50%;
-            animation: env-spin 0.8s linear infinite;
-          }
-          @keyframes env-spin {
-            to { transform: rotate(360deg); }
-          }
-          .error-message {
-            color: var(--vscode-errorForeground);
-            font-size: 0.9em;
-            display: none;
-          }
-          .section-separator {
-            border: none;
-            border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
-            margin: 10px 0 6px 0;
-          }
-          .section-label {
-            font-weight: bold;
-            color: var(--vscode-descriptionForeground);
-            font-size: 0.85em;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 6px;
-            display: block;
-          }
-          .hint-text {
-            font-size: 0.85em;
-            color: var(--vscode-descriptionForeground);
-            margin-top: 6px;
-          }
-          .hint-text a {
-            color: var(--vscode-textLink-foreground);
-            text-decoration: none;
-          }
-          .hint-text a:hover {
-            text-decoration: underline;
-          }
-        </style>
-    </head>
-    <body>
-          <div class="container">
-              <div id="selectedProjectPath" class="selectedFile">
-                <span class="filePrefix">Selected project folder: </span>
-                <span class="filePath">Please create or select a project folder</span>
-              </div>
-              <div></div>
-              <button id="startComputeBtn">Run <strong>Test</strong> Job</button>
-              <button id="stopComputeBtn" style="display: none;">Stop Job</button>
-              <div id="errorMessage" class="error-message"></div>
-              <button id="createNewProjectBtn">Create New Project Folder</button>
+          break;
 
-              <button id="selectProjectFolderBtn">Select Project Folder</button>
-              <button id="configureCompute">Configure Compute ⚙️</button>
-              <button id="openStorageBtn" disabled style="opacity:0.6;">Configure Persistent Storage</button>
-              <input id="datasetInput" placeholder="Dataset URL/IPFS/Arweave/DID" />
-              <div id="mountedBadge">No persistent datasets mounted</div>
-              <div id="outputBucketBadge"></div>
+        case 'jobStopped':
+          isRunning = false;
+          runningJobId = null;
+          stopTimer();
+          renderStatus();
+          renderRunBtn();
+          renderTimer();
+          renderJobActions();
+          // Refresh job list
+          vscode.postMessage({ type: 'getJobs' });
+          break;
 
-              <hr class="section-separator" />
-              <select id="jobSelect" class="environment-select" disabled>
-                <option value="">No jobs yet</option>
-              </select>
-              <button id="downloadResultsBtn" disabled style="opacity: 0.8;">Download Results</button>
-              <p class="hint-text">
-                More job results can be found 
-                <a id="openConsumerDashboardLink" href="#">here</a>.
-              </p>
-          </div>
+        case 'jobCompleted':
+          isRunning = false;
+          runningJobId = null;
+          stopTimer();
+          renderStatus();
+          renderRunBtn();
+          renderTimer();
+          renderJobActions();
+          // Refresh job list
+          vscode.postMessage({ type: 'getJobs' });
+          break;
 
-          <div class="section">
-              <div id="setupHeader" class="section-header">
-                  <span class="chevron">&#9658;</span>Setup
-              </div>
-              <div id="setup" class="section-content">
-                  <div class="container">
+        // Legacy compat — ignore remaining old message types gracefully
+        default:
+          break;
+      }
+    });
 
-                      <div class="environment-section">
-                        <button id="checkConnectionBtn">Check connection</button>
-                        <div id="environmentDetails" class="environment-details"></div>
-                      </div>
-
-                      <div style="margin: 5px 0; font-size: 0.85em; color: var(--vscode-descriptionForeground); font-style: italic;">
-                        *Dockerfile in project root takes priority
-                      </div>
-                      
-                      <label for="dockerImageInput">Docker Image (optional)</label>
-                      <input id="dockerImageInput" placeholder="Enter custom Docker image name" />
-
-                      <label for="dockerTagInput">Docker Tag (optional)</label>
-                      <input id="dockerTagInput" placeholder="Enter custom Docker tag" />
-                  </div>
-              </div>
-          </div>
-
-          <script>
-              const vscode = acquireVsCodeApi();
-              const defaultMultiaddr = "${this.defaultMultiaddr.replace(/"/g, '\\"')}";
-              let selectedProjectPath = '';
-              let selectedAlgorithmPath = '';
-              let selectedResultsFolderPath = '';
-              let availableEnvironments = [];
-              let sessionJobIds = [];
-              let configResources = null;
-              let jobDuration = null;
-              let isFreeCompute = true; // Default to free compute
-              let storedAuthToken = null;
-              let storedEnvironmentId = null;
-              let storedMultiaddrs = null;
-              let mountedEntries = [];
-              let outputBucket = null;
-
-              function renderOutputBucketBadge() {
-                const el = document.getElementById('outputBucketBadge');
-                if (!el) return;
-                if (!outputBucket || !outputBucket.bucketId) {
-                  el.style.display = 'none';
-                  el.textContent = '';
-                  return;
-                }
-                el.style.display = 'block';
-                el.textContent = 'Output bucket: ' + (outputBucket.bucketName || outputBucket.bucketId) + ' — existing files will be overwritten';
-              }
-
-              function renderMountedBadge() {
-                const el = document.getElementById('mountedBadge');
-                if (!el) return;
-                if (!mountedEntries.length) {
-                  el.className = '';
-                  el.textContent = 'No persistent datasets mounted';
-                  return;
-                }
-                el.className = 'has-mounts';
-                const labels = mountedEntries.map((e) => {
-                  const short = e.bucketId.length > 12 ? e.bucketId.slice(0, 6) + '…' : e.bucketId;
-                  return short + '/' + e.fileName;
-                });
-                el.textContent = mountedEntries.length + ' mounted: ' + labels.join(', ');
-              }
-
-              // --- Storage button state ---
-              let isNodeConnected = false;
-              let hasPersistentStorage = false;
-
-              function updateStorageButtonState() {
-                const btn = document.getElementById('openStorageBtn');
-                if (!btn) return;
-                const enabled = isNodeConnected && !!storedAuthToken && hasPersistentStorage
-                const persistentStorageDisabled = isNodeConnected && !!storedAuthToken && !hasPersistentStorage
-                btn.disabled = !enabled;
-                btn.style.opacity = enabled ? '1' : '0.6';
-                btn.title = enabled
-                  ? 'Manage persistent storage buckets'
-                  : persistentStorageDisabled ? 'Node does not have persistent storage enabled/configured' : 'Connect to a node via the dashboard to enable';
-              }
-
-              if (document.getElementById('openStorageBtn')) {
-                document.getElementById('openStorageBtn').addEventListener('click', () => {
-                  vscode.postMessage({ type: 'openStoragePanel' });
-                });
-              }
-
-              function getMultiaddrs() { return storedMultiaddrs || [defaultMultiaddr]; }
-              function truncateMultiaddr(addr) {
-                  if (!addr) return 'N/A';
-                  return addr.length > 40 ? addr.substring(0, 20) + '...' + addr.substring(addr.length - 12) : addr;
-              }
-
-
-              const environmentDetails = document.getElementById('environmentDetails');
-
-              function toggleSection(sectionId) {
-                  const header = document.getElementById(sectionId + 'Header');
-                  const content = document.getElementById(sectionId);
-                  header.classList.toggle('active');
-                  content.classList.toggle('active');
-              }
-
-              // Initialize only the setup section toggle
-              document.getElementById('setupHeader').addEventListener('click', () => toggleSection('setup'));
-
-              if (document.getElementById('createNewProjectBtn')) {
-                  document.getElementById('createNewProjectBtn').addEventListener('click', () => {
-                      console.log('Create new project button clicked');
-                      vscode.postMessage({ 
-                          type: 'createNewProjectFolder'
-                      });
-                  });
-              }
-
-              if (document.getElementById('selectProjectFolderBtn')) {
-                  document.getElementById('selectProjectFolderBtn').addEventListener('click', () => {
-                      console.log('Select project folder button clicked');
-                      vscode.postMessage({
-                          type: 'selectProjectFolder' 
-                      });
-                  });
-              }
-
-              if (document.getElementById('checkConnectionBtn')) {
-                  document.getElementById('checkConnectionBtn').addEventListener('click', () => loadEnvironments());
-              }
-
-              if (document.getElementById('datasetInput')) {
-                document.getElementById('datasetInput').addEventListener('input', (e) => {
-                  const input = e.target.value.trim();
-                  const validationIcon = document.getElementById('datasetValidationIcon');
-                  
-                  if (!input) {
-                    validationIcon.textContent = '';
-                    document.getElementById('errorMessage').style.display = 'none';
-                    return;
-                  }
-
-                  console.log('Dataset input changed:', input);
-                  vscode.postMessage({
-                    type: 'validateDatasetFromInput',
-                    input: input
-                  });
-                });
-              }
-
-              function setDownloadBtnState(enabled) {
-                  const btn = document.getElementById('downloadResultsBtn');
-                  btn.disabled = !enabled;
-                  btn.style.opacity = enabled ? '1' : '0.8';
-              }
-
-              // Toggle button visibility
-              function showStartButton() {
-                  document.getElementById('startComputeBtn').style.display = 'block';
-                  document.getElementById('stopComputeBtn').style.display = 'none';
-                  // Reset button state
-                  document.getElementById('startComputeBtn').disabled = false;
-                  document.getElementById('startComputeBtn').style.opacity = '1';
-              }
-
-              function showStopButton() {
-                  document.getElementById('startComputeBtn').style.display = 'none';
-                  document.getElementById('stopComputeBtn').style.display = 'block';
-              }
-
-              function disableStartButton() {
-                document.getElementById('startComputeBtn').disabled = true;
-                document.getElementById('startComputeBtn').style.opacity = '0.8';
-              }
-
-              if (document.getElementById('startComputeBtn')) {
-                  document.getElementById('startComputeBtn').addEventListener('click', () => {
-                      const dockerImage = document.getElementById('dockerImageInput').value;
-                      const dockerTag = document.getElementById('dockerTagInput').value;
-                      const errorMessage = document.getElementById('errorMessage');
-                      const environmentId = storedEnvironmentId || (availableEnvironments.length > 0 ? availableEnvironments[0].id : undefined);
-                      
-                      if (!selectedProjectPath) {
-                          errorMessage.textContent = 'Please create or select a project folder';
-                          errorMessage.style.display = 'block';
-                          return;
-                      }
-
-                      let algorithmPath = selectedAlgorithmPath;
-                      let resultsFolderPath = selectedResultsFolderPath;
-                      
-                      if (!algorithmPath || !resultsFolderPath) {
-                          errorMessage.textContent = 'Project folder must contain an algorithm file and results folder';
-                          errorMessage.style.display = 'block';
-                          return;
-                      }
-
-                      // Clear any previous error
-                      errorMessage.style.display = 'none';
-
-                      // Start compute job directly
-                      vscode.postMessage({
-                          type: 'startComputeJob',
-                          authToken: storedAuthToken,
-                          algorithmPath: algorithmPath,
-                          resultsFolderPath: resultsFolderPath,
-                          datasetPath: document.getElementById('datasetInput').value || undefined,
-                          dockerImage: dockerImage || undefined,
-                          dockerTag: dockerTag || undefined,
-                          environmentId: environmentId
-                      });
-                  });
-              }
-
-              if (document.getElementById('configureCompute')) {
-                  document.getElementById('configureCompute').addEventListener('click', () => {
-                      vscode.postMessage({ 
-                          type: 'openBrowser',
-                          url: 'https://dashboard.oncompute.ai/run-job/environments'
-                      });
-                  });
-              }
-
-              if (document.getElementById('stopComputeBtn')) {
-                  document.getElementById('stopComputeBtn').addEventListener('click', () => {
-                      vscode.postMessage({ type: 'stopComputeJob', authToken: storedAuthToken });
-                  });
-              }
-
-              document.getElementById('downloadResultsBtn').addEventListener('click', () => {
-                  const jobId = document.getElementById('jobSelect').value;
-                  if (!jobId) return;
-                  vscode.postMessage({ type: 'downloadResults', jobId });
-              });
-
-              document.getElementById('openConsumerDashboardLink').addEventListener('click', (e) => {
-                  e.preventDefault();
-                  vscode.postMessage({ type: 'openExternalUrl', url: 'https://dashboard.oncompute.ai/profile/consumer' });
-              });
-
-              function showEnvironmentsLoading() {
-                const detailsDiv = document.getElementById('environmentDetails');
-                if (!detailsDiv) return;
-                detailsDiv.innerHTML = 
-                  '<div class="env-loading">' +
-                  '<div class="env-loading-spinner"></div>' +
-                  '<span>Checking connection...</span>' +
-                  '</div>';
-                detailsDiv.style.display = 'block';
-              }
-
-              function loadNodeStatus() {
-                  try {
-                    vscode.postMessage({
-                      type: 'getStatus'
-                    })
-                  } catch (error) {
-                    console.error('Error getting node status:', error);
-                  }
-              }
-
-              function loadEnvironments() {
-                showEnvironmentsLoading();
-                try {
-                  vscode.postMessage({
-                    type: 'getEnvironments'
-                  });
-                } catch (error) {
-                  console.error('Error loading environments:', error);
-                  document.getElementById('environmentDetails').innerHTML = 
-                    '<p style="color: var(--vscode-errorForeground);">Failed to check connection</p>';
-                  disableStartButton();
-                }
-              }
-              
-              // Disable start button initially until node is validated and project is selected
-              disableStartButton();
-              
-              // Load environments on page load
-              loadEnvironments();
-              updateStorageButtonState();
-              
-              function checkStartButtonState() {
-                  const hasProject = selectedProjectPath && selectedProjectPath.trim() !== '';
-                  const hasEnvironments = availableEnvironments && availableEnvironments.length > 0;
-                  
-                  if (hasProject && hasEnvironments) {
-                      document.getElementById('startComputeBtn').disabled = false;
-                      document.getElementById('startComputeBtn').style.opacity = '1';
-                  } else {
-                      document.getElementById('startComputeBtn').disabled = true;
-                      document.getElementById('startComputeBtn').style.opacity = '0.8';
-                  }
-              }
-
-              function showEnvDetails(envId) {
-                  const detailsDiv = document.getElementById('environmentDetails');
-                  const selectedEnv = availableEnvironments.find(e => e.id === envId);
-                  if (!selectedEnv || !detailsDiv) {
-                      if (detailsDiv) detailsDiv.style.display = 'none';
-                      return;
-                  }
-                  function formatResourceValue(amount, resourceId) {
-                      if (resourceId === 'ram' || resourceId === 'disk') return Math.round(amount) + ' GB';
-                      return amount;
-                  }
-                  function getAvailableValue(resourceId, isFreeCompute) {
-                      const resources = isFreeCompute ? (selectedEnv.free?.resources || []) : (selectedEnv.resources || []);
-                      const envResource = resources.find(r => r.id === resourceId);
-                      return envResource ? formatResourceValue((envResource.max || 0) - (envResource.inUse || 0), resourceId) : 'N/A';
-                  }
-                  const truncatedId = selectedEnv.id.length > 13 
-                      ? selectedEnv.id.substring(0, 6) + '...' + selectedEnv.id.substring(selectedEnv.id.length - 4)
-                      : selectedEnv.id;
-                  let resourceDetails = '';
-                  let resourcesLabel = 'Resources:';
-                  resourcesLabel = 'Resources (SELECTED / AVAILABLE):';
-                  resourceDetails = (configResources || []).map(r => {
-                      const selectedValue = formatResourceValue(r.amount, r.id);
-                      const availableValue = getAvailableValue(r.id, isFreeCompute);
-                      return '<p style="margin: 4px 0;"><span class="label">' + r.id.toUpperCase() + ':</span> ' + selectedValue + ' / ' + availableValue + '</p>';
-                  }).join('');
-                  resourceDetails += '<p style="margin: 4px 0;"><span class="label">Job Duration:</span> ' + (jobDuration || 'N/A') + ' seconds</p>';
-                  const multiaddrDisplay = truncateMultiaddr(getMultiaddrs()[0]);
-                  detailsDiv.innerHTML = 
-                      '<p style="margin: 4px 0;"><span class="label">Multiaddress:</span> ' + multiaddrDisplay + '</p>' +
-                      '<p><span class="label">Environment ID:</span> ' + truncatedId + '</p>' +
-                      '<p><span class="label">OS:</span> ' + (selectedEnv.platform?.os ?? 'N/A') + '</p>' +
-                      '<p><span class="label">Architecture:</span> ' + (selectedEnv.platform?.architecture ?? 'N/A') + '</p>' +
-                      '<div style="margin: 4px 0;">' +
-                      '<div class="label" style="margin-bottom: 2px;">Consumer Address:</div>' +
-                      '<div style="display: flex; align-items: center; gap: 8px; background: var(--vscode-input-background); padding: 4px; border-radius: 4px;">' +
-                      '<span style="font-family: monospace; flex-grow: 1; overflow-x: auto; white-space: nowrap;">' + 
-                      (selectedEnv.consumerAddress.length > 24 
-                          ? selectedEnv.consumerAddress.substring(0, 12) + '...' + selectedEnv.consumerAddress.substring(selectedEnv.consumerAddress.length - 8)
-                          : selectedEnv.consumerAddress) + 
-                      '</span>' +
-                      '<button id="copyAddressBtn" style="padding: 2px 8px; margin: 0; width: auto; min-width: 60px; font-size: 0.9em;">Copy</button>' +
-                      '</div></div>' +
-                      '<p><span class="label">' + resourcesLabel + '</span></p>' +
-                      '<div style="margin-left: 8px;">' + resourceDetails + '</div>';
-                  detailsDiv.style.display = 'block';
-                  const copyBtn = document.getElementById('copyAddressBtn');
-                  if (copyBtn) {
-                      copyBtn.addEventListener('click', () => {
-                          vscode.postMessage({ type: 'copyToClipboard', text: selectedEnv.consumerAddress });
-                          copyBtn.textContent = 'Copied!';
-                          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-                      });
-                  }
-              }
-
-              window.addEventListener('message', event => {
-                  const message = event.data;
-                  console.log('Received message:', message);
-                  
-                  switch (message.type) {
-                      case 'configUpdate':
-                          if (message.config.authToken) {
-                              storedAuthToken = message.config.authToken;
-                              updateStorageButtonState();
-                          }
-                          let didReloadEnvironments = false;
-                          if (message.config.multiaddresses !== undefined) {
-                              storedMultiaddrs = message.config.multiaddresses;
-                              showEnvironmentsLoading();
-                              loadEnvironments();
-                              didReloadEnvironments = true;
-                          }
-                          if (message.config.environmentId) {
-                              storedEnvironmentId = message.config.environmentId;
-                              if (!didReloadEnvironments && message.config.environmentId && availableEnvironments.length > 0) {
-                                showEnvDetails(message.config.environmentId);
-                              }
-                          }
-                          if (message.config.resources) {
-                            configResources = message.config.resources;
-                            jobDuration = message.config.jobDuration;
-                            const envId = storedEnvironmentId || (availableEnvironments.length > 0 ? availableEnvironments[0].id : null);
-                            if (envId && !didReloadEnvironments) {
-                              showEnvDetails(envId);
-                            }
-                          }
-                          if (message.config.isFreeCompute !== undefined) {
-                            isFreeCompute = message.config.isFreeCompute;
-                            const startComputeBtn = document.getElementById('startComputeBtn');
-                            if (startComputeBtn) {
-                              startComputeBtn.innerHTML = message.config.isFreeCompute === true 
-                                ? 'Run <strong>Test</strong> Job'
-                                : 'Run <strong>Compute</strong> Job';
-                            }
-                          }
-                          break;
-                      case 'projectFolder':
-                          selectedProjectPath = message.path;
-                          const projectElement = document.getElementById('selectedProjectPath');
-                          const projectType = message.projectType;
-                          const typeInfo = projectType ? ' (' + projectType + ')' : '';
-                          projectElement.innerHTML = '<span class="filePrefix">Selected project folder: </span><span class="filePath">' + message.path + typeInfo + '</span>';
-                          
-                          selectedAlgorithmPath = message.path + '/' + message.algorithmFileName;
-                          selectedResultsFolderPath = message.path + '/results';
-                          
-                          checkStartButtonState();
-                          break;
-                      case 'projectCreated':
-                          selectedProjectPath = message.projectPath;
-                          selectedAlgorithmPath = message.algorithmPath;
-                          selectedResultsFolderPath = message.resultsPath;
-                          
-                          const projectElementCreated = document.getElementById('selectedProjectPath');
-                          const languageInfo = message.language ? ' (' + message.language + ')' : '';
-                          projectElementCreated.innerHTML = '<span class="filePrefix">Selected project folder: </span><span class="filePath">' + message.projectPath + languageInfo + '</span>';
-                          
-                          checkStartButtonState();
-                          break;
-                      case 'mountedUpdate':
-                        mountedEntries = message.entries || [];
-                        renderMountedBadge();
-                        break;
-                      case 'outputBucketUpdate':
-                        outputBucket = { bucketId: message.bucketId, bucketName: message.bucketName };
-                        renderOutputBucketBadge();
-                        break;
-                      case 'datasetValidationResult':
-                        const validationIcon = document.getElementById('datasetValidationIcon');
-                        if(!message.isValid) {
-                          validationIcon.textContent = 'x';
-                          validationIcon.style.color = 'var(--vscode-errorForeground)';
-                          return
-                        }
-                        validationIcon.textContent = '✓';
-                        validationIcon.style.color = '#4CAF50';
-                        break;
-                      case 'statusLoaded':
-                        if (message.error) {
-                          hasPersistentStorage = false;
-                          updateStorageButtonState();
-                          return;
-                        }
-
-                        hasPersistentStorage = message.hasPersistentStorage;
-                        updateStorageButtonState();
-                        break;
-                      case 'environmentsLoaded':
-                          console.log('Environments loaded:', message.environments);
-                          availableEnvironments = message.environments || [];
-                          const detailsEl = document.getElementById('environmentDetails');
-
-                          if (message.error) {
-                            detailsEl.innerHTML = '<p style="color: var(--vscode-errorForeground);">Connection failed</p>';
-                            detailsEl.style.display = 'block';
-                            disableStartButton();
-                            isNodeConnected = false;
-                            hasPersistentStorage = false;
-                            updateStorageButtonState();
-                            return;
-                          }
-
-                          if (!message.environments || message.environments.length === 0) {
-                            detailsEl.innerHTML = '<p style="color: var(--vscode-descriptionForeground);">No environments available</p>';
-                            detailsEl.style.display = 'block';
-                            disableStartButton();
-                            hasPersistentStorage = false;
-                            isNodeConnected = false;
-                            updateStorageButtonState();
-                            return;
-                          }
-
-                          isNodeConnected = true;
-                          loadNodeStatus();
-                          updateStorageButtonState();
-                          checkStartButtonState();
-
-                          const envId = storedEnvironmentId || (availableEnvironments.length > 0 ? availableEnvironments[0].id : null);
-                          if (envId) {
-                              showEnvDetails(envId);
-                          }
-                          break;
-
-                      case 'jobLoading':
-                          disableStartButton();
-                          setDownloadBtnState(false);
-                          break;
-                      case 'jobStarted':
-                          showStopButton();
-                          break;
-                      case 'jobStopped':
-                          showStartButton();
-                          setDownloadBtnState(sessionJobIds.length > 0);
-                          break;
-                      case 'jobCompleted': {
-                          showStartButton();
-                          const jobId = message.jobId;
-                          if (jobId) {
-                              const select = document.getElementById('jobSelect');
-                              if (sessionJobIds.length === 0) select.innerHTML = '';
-                              sessionJobIds.push(jobId);
-                              const now = new Date();
-                              const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                              const label = jobId.substring(0, 8) + '.....' + jobId.slice(-6) + ' (' + time + ')';
-                              const opt = document.createElement('option');
-                              opt.value = jobId;
-                              opt.textContent = label;
-                              select.appendChild(opt);
-                              select.value = jobId;
-                              select.disabled = false;
-                              setDownloadBtnState(true);
-                          }
-                          break;
-                      }
-                  }
-              });
-          </script>
-    </body>
-    </html>
-    `
+    // -------------------------------------------------------------------------
+    // Init
+    // -------------------------------------------------------------------------
+    // connStatus starts as 'connecting'; updated by defaultEnvLoaded / stateUpdate
+    renderAll();
+    vscode.postMessage({ type: 'getState' });
+    vscode.postMessage({ type: 'getJobs' });
+    // Request default env capabilities on first load (default-free mode)
+    if (mode === 'default-free') {
+      defaultEnvRequested = true;
+      connStatus = 'connecting';
+      vscode.postMessage({ type: 'getDefaultEnv' });
+    }
+  </script>
+</body>
+</html>`
   }
 }

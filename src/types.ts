@@ -35,6 +35,54 @@ export class SelectedConfig {
 
 export type GatewayResponse = { httpStatus?: number; error?: string }
 
+export type EnvSummary = {
+  envId: string
+  nodeId: string
+  multiaddrs?: string[]
+  consumerAddress: string
+  label: string
+  resources?: any[]
+  fees?: any
+  feeTokens: string[]
+}
+
+export type IncentiveJob = {
+  jobId: string
+  statusText: string
+  isRunning: boolean
+  isFree: boolean
+  environmentId: string
+  environment: string
+  cost?: number
+  dateCreated: number
+  dateFinished?: number
+  outputsURL?: string
+}
+
+export type LocalJobRecord = {
+  jobId: string
+  name: string
+  envLabel: string
+  cost?: number
+  createdAt: number
+  status?: string
+  nodeUri?: string
+  authToken?: string
+  address?: string
+}
+
+export type JobView = {
+  jobId: string
+  name: string
+  status: 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Stopped'
+  envLabel: string
+  cost?: number
+  createdAt: number
+  finishedAt?: number
+  outputsURL?: string
+  isLocalOnly: boolean
+}
+
 export type StorageAccessEntry = { chainId: string; contract: string }
 
 export type StorageErrorCode =

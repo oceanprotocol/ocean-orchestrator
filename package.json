@@ -57,8 +57,22 @@
       {
         "command": "ocean-protocol.getAssetDetails",
         "title": "Ocean: Get Asset Details"
+      },
+      {
+        "command": "ocean-protocol.openConfigureJob",
+        "title": "Ocean: Configure Job"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Ocean Orchestrator",
+      "properties": {
+        "ocean.baseRpcUrl": {
+          "type": "string",
+          "default": "https://mainnet.base.org",
+          "description": "Base RPC endpoint used for escrow balance reads and on-chain queries. Change this to use a private RPC provider for better reliability."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
@@ -116,6 +130,7 @@
     "@libp2p/tls": "^3.0.10",
     "@libp2p/websockets": "^10.1.2",
     "@multiformats/multiaddr": "^13.0.1",
+    "@oceanprotocol/contracts": "^2.8.0",
     "@oceanprotocol/lib": "8.5.1",
     "chai": "^4.3.10",
     "cross-fetch": "^4.0.0",
@@ -133,7 +148,8 @@
     "posthog-node": "^5.21.2",
     "private-ip": "^3.0.2",
     "tar": "^7.5.11",
-    "uint8arrays": "^4.0.6"
+    "uint8arrays": "^4.0.6",
+    "unique-names-generator": "^4.7.1"
   },
   "activationEvents": [
     "onCommand:ocean-protocol.searchAssets",

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import { stripAnsi } from './strip-ansi'
+import { stripAnsi, stripControlChars } from './strip-ansi'
 import fs from 'fs'
 import path from 'path'
 import * as tar from 'tar'
@@ -334,11 +334,17 @@ export async function saveResults(
   }
 }
 
+/**
+ * Streams a job's logs into the output channel. Returns true if any log output
+ * was written (false when the node returned nothing or the request failed —
+ * the caller can then surface a clear message instead of a blank panel).
+ */
 export async function getComputeLogs(
   config: SelectedConfig,
   jobId: string,
   outputChannel: vscode.OutputChannel
-): Promise<void> {
+): Promise<boolean> {
+  let wrote = false
   try {
     outputChannel.show(true)
     const logs = await ProviderInstance.computeStreamableLogs(
@@ -349,11 +355,16 @@ export async function getComputeLogs(
 
     const decoder = new TextDecoder('utf-8')
     for await (const chunk of logs) {
-      outputChannel.append(stripAnsi(decoder.decode(chunk.subarray(), { stream: true })))
+      const text = stripControlChars(stripAnsi(decoder.decode(chunk.subarray(), { stream: true })))
+      if (text.length > 0) {
+        wrote = true
+      }
+      outputChannel.append(text)
     }
   } catch (error) {
     console.error('Error fetching compute logs:', error)
   }
+  return wrote
 }
 
 async function attemptSaveOutput(

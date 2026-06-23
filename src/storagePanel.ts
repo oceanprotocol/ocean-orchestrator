@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import { webviewCss } from './webviewStyles'
 
 export class StoragePanel {
   public static currentPanel: StoragePanel | undefined
@@ -49,185 +50,87 @@ export class StoragePanel {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <title>Ocean Storage</title>
 <style>
-  body {
-    font-family: var(--vscode-font-family);
-    font-size: var(--vscode-font-size);
-    color: var(--vscode-foreground);
-    background: var(--vscode-editor-background);
-    margin: 0;
-    padding: 0;
-  }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    background: var(--vscode-editor-background);
-    position: sticky;
-    top: 0;
-    z-index: 5;
-  }
-  .toolbar h2 { margin: 0; font-size: 1.1em; flex: 1; }
-  .content { padding: 16px; }
-  button {
-    font-family: inherit;
-    font-size: inherit;
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border: 1px solid transparent;
-    padding: 4px 10px;
-    border-radius: 2px;
-    cursor: pointer;
-  }
-  button:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-ghost {
-    background: transparent;
-    color: var(--vscode-foreground);
-    border: 1px solid var(--vscode-panel-border);
-  }
-  .btn-ghost:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
-  .btn-secondary {
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-  }
-  .btn-danger {
-    background: var(--vscode-errorForeground, #f48771);
-    color: #fff;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-  th, td {
-    text-align: left;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    vertical-align: middle;
-  }
-  th {
-    font-weight: 600;
-    color: var(--vscode-descriptionForeground);
-    font-size: 0.9em;
-  }
-  tbody tr.clickable { cursor: pointer; }
-  tbody tr.clickable:hover { background: var(--vscode-list-hoverBackground); }
-  code {
-    font-family: var(--vscode-editor-font-family);
-    font-size: 0.9em;
-    background: var(--vscode-textBlockQuote-background);
-    padding: 1px 4px;
-    border-radius: 2px;
-  }
-  .detail-header {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-    padding-bottom: 12px;
-    margin-bottom: 12px;
-    border-bottom: 1px solid var(--vscode-panel-border);
-  }
-  .detail-header > div { flex: 1 1 auto; min-width: 200px; font-size: 0.9em; }
-  .detail-header .upload-btn { flex: 0 0 auto; }
-  .empty-state {
-    padding: 40px 16px;
-    text-align: center;
-    color: var(--vscode-descriptionForeground);
-  }
-  .locked-state {
-    padding: 60px 16px;
-    text-align: center;
-    color: var(--vscode-descriptionForeground);
-  }
-  .locked-state strong { color: var(--vscode-foreground); display: block; margin-bottom: 8px; }
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.4);
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-  }
-  .modal-backdrop.open { display: flex; }
-  .modal-card {
-    background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    padding: 20px;
-    min-width: 460px;
-    max-width: 620px;
-    max-height: 80vh;
-    overflow: auto;
-  }
-  .modal-card h3 { margin: 0 0 12px; }
-  .modal-card label { display: block; margin: 12px 0 6px; font-size: 0.9em; color: var(--vscode-descriptionForeground); }
-  .access-row {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-    align-items: center;
-  }
-  .modal-card input, .modal-card select {
-    font-family: inherit;
-    font-size: inherit;
-    color: var(--vscode-input-foreground);
-    background: var(--vscode-input-background);
-    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-    padding: 4px 6px;
-    border-radius: 2px;
-    box-sizing: border-box;
-  }
-  .modal-card > input { width: 100%; }
-  .access-row select { width: 140px; }
-  .access-row input { flex: 1; min-width: 0; }
-  .access-row button { width: 28px; padding: 4px; }
-  .access-row.invalid input { border-color: var(--vscode-errorForeground, #f48771); }
-  .modal-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-    margin-top: 16px;
-  }
-  .loading-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.2);
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-    color: var(--vscode-foreground);
-  }
-  .loading-overlay.open { display: flex; }
-  .toast {
-    position: fixed;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--vscode-notifications-background, var(--vscode-editor-background));
-    color: var(--vscode-notifications-foreground, var(--vscode-foreground));
-    border: 1px solid var(--vscode-panel-border);
-    padding: 8px 14px;
-    border-radius: 4px;
-    display: none;
-    z-index: 200;
-    max-width: 80%;
-  }
-  .toast.open { display: block; }
-  .toast.error { border-color: var(--vscode-errorForeground, #f48771); }
-  .mono { font-family: var(--vscode-editor-font-family); font-size: 0.9em; }
-  .muted { color: var(--vscode-descriptionForeground); }
+${webviewCss()}
+
+/* =========================================================================
+   Storage-panel–specific overrides (classes not in the shared system)
+   ========================================================================= */
+
+/* Toolbar title uses h2 here (shared uses .toolbar-title) */
+.toolbar h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* btn-secondary — alias for shared ghost style (Cancel buttons in modals) */
+.btn-secondary {
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-panel-border);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition), border-color var(--transition);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: var(--vscode-list-hoverBackground);
+}
+.btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Bucket/file detail header layout */
+.detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.detail-header > div { flex: 1 1 auto; min-width: 200px; font-size: var(--fs-sm); }
+.detail-header .upload-btn { flex: 0 0 auto; }
+
+/* Access-list rows inside modal */
+.access-row {
+  display: flex;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-1);
+  align-items: center;
+}
+.access-row select { width: 140px; }
+.access-row input { flex: 1; min-width: 0; }
+.access-row button { width: 28px; padding: var(--sp-1); }
+.access-row.invalid input { border-color: var(--vscode-errorForeground); }
+
+/* Modal inner label override (shared label rule adds margin-bottom only) */
+.modal-card label {
+  display: block;
+  margin: var(--sp-3) 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--vscode-descriptionForeground);
+}
+.modal-card > input { width: 100%; }
+
+/* .muted — alias for .text-muted */
+.muted { color: var(--vscode-descriptionForeground); }
 </style>
 </head>
 <body>
   <div class="toolbar">
-    <button id="backBtn" class="btn-ghost" style="display:none">\u2190 Back</button>
+    <button id="backBtn" class="btn btn-ghost" style="display:none">\u2190 Back</button>
     <h2 id="title">Persistent Storage</h2>
     <div id="primaryActions">
-      <button id="createBucketBtn">+ Create bucket</button>
+      <button id="createBucketBtn" class="btn btn-pri">+ Create bucket</button>
     </div>
   </div>
 
@@ -259,7 +162,7 @@ export class StoragePanel {
       <div>Bucket: <strong id="detailBucketName"></strong> <code id="detailBucketId"></code></div>
       <div>Owner: <code id="detailOwner"></code></div>
       <div>Access: <span id="detailAccess"></span></div>
-      <button id="uploadBtn" class="upload-btn">\u2934 Upload file</button>
+      <button id="uploadBtn" class="btn btn-ghost upload-btn">\u2934 Upload file</button>
     </div>
     <div id="fileListEmpty" class="empty-state" style="display:none">
       No files in this bucket.
@@ -289,8 +192,8 @@ export class StoragePanel {
         <input id="accessContract" placeholder="0x… contract address (optional)" />
       </div>
       <div class="modal-actions">
-        <button id="cancelCreateBtn" class="btn-secondary">Cancel</button>
-        <button id="confirmCreateBtn">Create</button>
+        <button id="cancelCreateBtn" class="btn btn-secondary">Cancel</button>
+        <button id="confirmCreateBtn" class="btn btn-pri">Create</button>
       </div>
     </div>
   </div>
@@ -301,8 +204,8 @@ export class StoragePanel {
       <label>Name</label>
       <input id="renameBucketName" placeholder="Leave blank to use the bucket ID" />
       <div class="modal-actions">
-        <button id="cancelRenameBtn" class="btn-secondary">Cancel</button>
-        <button id="confirmRenameBtn">Save</button>
+        <button id="cancelRenameBtn" class="btn btn-secondary">Cancel</button>
+        <button id="confirmRenameBtn" class="btn btn-pri">Save</button>
       </div>
     </div>
   </div>
@@ -417,7 +320,7 @@ export class StoragePanel {
     document.getElementById('lockedState').style.display = 'none';
     document.getElementById('bucketListView').style.display = 'block';
     document.getElementById('bucketDetailView').style.display = 'none';
-    document.getElementById('primaryActions').innerHTML = '<button id="createBucketBtn">+ Create bucket</button>';
+    document.getElementById('primaryActions').innerHTML = '<button id="createBucketBtn" class="btn btn-pri">+ Create bucket</button>';
     document.getElementById('createBucketBtn').addEventListener('click', openCreateModal);
     document.getElementById('backBtn').style.display = 'none';
     document.getElementById('title').textContent = 'Persistent Storage';
@@ -464,7 +367,7 @@ export class StoragePanel {
       createdCell.textContent = formatDate(b.createdAt);
       const actCell = document.createElement('td');
       const renameBtn = document.createElement('button');
-      renameBtn.className = 'btn-ghost';
+      renameBtn.className = 'btn btn-ghost';
       renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -540,7 +443,7 @@ export class StoragePanel {
       modCell.textContent = formatDate(f.lastModified);
       const actCell = document.createElement('td');
       const delBtn = document.createElement('button');
-      delBtn.className = 'btn-ghost';
+      delBtn.className = 'btn btn-ghost';
       delBtn.textContent = 'Delete';
       delBtn.addEventListener('click', () => deleteFile(f.name));
       actCell.appendChild(delBtn);
