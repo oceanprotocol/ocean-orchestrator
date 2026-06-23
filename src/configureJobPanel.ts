@@ -560,9 +560,10 @@ function applyEnvToSliders(env) {
 }
 
 function updateReadouts() {
-  document.getElementById('cpuVal').textContent = state.resources.cpu + ' cores';
-  document.getElementById('ramVal').textContent = state.resources.ram + ' GB';
-  document.getElementById('diskVal').textContent = state.resources.disk + ' GB';
+  const maxOf = (id) => document.getElementById(id).max;
+  document.getElementById('cpuVal').textContent = state.resources.cpu + ' / ' + maxOf('cpuSlider') + ' cores';
+  document.getElementById('ramVal').textContent = state.resources.ram + ' / ' + maxOf('ramSlider') + ' GB';
+  document.getElementById('diskVal').textContent = state.resources.disk + ' / ' + maxOf('diskSlider') + ' GB';
   document.getElementById('durationVal').textContent = formatDuration(state.resources.durationSeconds);
 }
 

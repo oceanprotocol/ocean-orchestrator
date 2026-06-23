@@ -1335,8 +1335,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'defaultJobName':
-          // Prefill only when the user hasn't typed anything yet.
-          if (!jobNameInput.value.trim()) {
+          // Force after a run (fresh name for the next job); otherwise only prefill empty.
+          if (msg.force || !jobNameInput.value.trim()) {
             jobNameInput.value = msg.name || '';
           }
           break;

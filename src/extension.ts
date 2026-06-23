@@ -1260,6 +1260,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return
         }
         pendingJobName = opts?.jobName || generateJobName()
+        provider?.sendMessage({ type: 'defaultJobName', name: generateJobName(), force: true })
         await vscode.commands.executeCommand(
           'ocean-protocol.startComputeJob',
           selectedProject.algorithmPath,
@@ -1284,6 +1285,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return
         }
         pendingJobName = opts?.jobName || pendingJobName || generateJobName()
+        provider?.sendMessage({ type: 'defaultJobName', name: generateJobName(), force: true })
         await vscode.commands.executeCommand(
           'ocean-protocol.startComputeJob',
           selectedProject.algorithmPath,
