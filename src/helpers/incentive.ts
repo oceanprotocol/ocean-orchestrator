@@ -35,6 +35,14 @@ interface ComputeJob {
   outputsURL?: string
 }
 
+// The extension's libp2p dials WebSockets, not raw TCP. Nodes advertise both
+// (often a raw /tcp/ addr first), so order WS/WSS addrs first to ensure the
+// node URI picked downstream (cost estimate, job run) is actually dialable.
+function orderDialable(addrs: string[]): string[] {
+  const isWs = (a: string) => /\/wss?\//.test(a)
+  return [...addrs.filter(isWs), ...addrs.filter((a) => !isWs(a))]
+}
+
 export async function fetchPaidEnvironments(): Promise<EnvSummary[]> {
   const filters = JSON.stringify({
     network: { operator: 'eq', value: String(BASE_CHAIN_ID) },
@@ -71,8 +79,10 @@ export async function fetchPaidEnvironments(): Promise<EnvSummary[]> {
       result.push({
         envId: env.id,
         nodeId: node.id,
-        multiaddrs: (node.multiaddrs ?? node.currentAddrs ?? []).map((a) =>
-          a.includes('/p2p/') ? a : `${a}/p2p/${node.id}`
+        multiaddrs: orderDialable(
+          (node.multiaddrs ?? node.currentAddrs ?? []).map((a) =>
+            a.includes('/p2p/') ? a : `${a}/p2p/${node.id}`
+          )
         ),
         consumerAddress: env.consumerAddress,
         label: node.friendlyName ?? node.id,

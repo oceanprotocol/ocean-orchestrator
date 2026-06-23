@@ -208,6 +208,10 @@ export async function computeStart(
 
     const uri = getNodeUri(config.multiaddresses)
 
+    // config.resources may carry a display-only `description` (GPU name) from
+    // the dashboard; the node only accepts { id, amount }.
+    const submitResources = config.resources?.map((r) => ({ id: r.id, amount: r.amount }))
+
     if (!config.isFreeCompute) {
       const computeJob = await ProviderInstance.computeStart(
         uri,
@@ -217,7 +221,7 @@ export async function computeStart(
         algorithm,
         Number(config.jobDuration),
         config.feeToken!,
-        config.resources!,
+        submitResources!,
         config.chainId!,
         undefined, // metadata
         undefined, // additionalViewers
@@ -237,7 +241,7 @@ export async function computeStart(
       config.environmentId,
       datasets,
       algorithm,
-      config.resources,
+      submitResources,
       undefined, // metadata
       undefined, // additionalViewers
       undefined, // output

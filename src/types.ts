@@ -5,6 +5,11 @@ import {
   PersistentStorageFileEntry
 } from '@oceanprotocol/lib'
 
+// A compute resource plus the optional human-readable name the dashboard
+// sends for GPUs (e.g. "NVIDIA H200"). The node only needs { id, amount };
+// description is display-only and is stripped before job submission.
+export type IdeResource = ComputeResourceRequest & { description?: string }
+
 export class SelectedConfig {
   authToken?: string
   address?: string
@@ -13,18 +18,19 @@ export class SelectedConfig {
   environmentId?: string
   feeToken?: string
   jobDuration?: string
-  resources?: ComputeResourceRequest[]
+  resources?: IdeResource[]
   chainId?: number
 
   constructor(params: Partial<SelectedConfig>) {
     Object.assign(this, params)
   }
 
-  static parseResources(resources: string): ComputeResourceRequest[] {
+  static parseResources(resources: string): IdeResource[] {
     const resourcesRequestJson = JSON.parse(resources)
     return resourcesRequestJson.map((resource: any) => ({
       id: resource.id,
-      amount: resource.amount
+      amount: resource.amount,
+      ...(resource.description ? { description: resource.description } : {})
     }))
   }
 

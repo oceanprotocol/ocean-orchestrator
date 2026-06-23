@@ -134,6 +134,41 @@ suite('incentive helper', () => {
       assert.strictEqual(result[2].nodeId, 'node-b')
       assert.strictEqual(result[2].label, 'node-b')
     })
+
+    test('orders WebSocket addrs before raw TCP (extension can only dial WS)', async () => {
+      const mockResponse = {
+        envs: [
+          {
+            id: 'node-ws',
+            // Node advertises raw TCP first, then WS/WSS — as real nodes do.
+            multiaddrs: [
+              '/ip4/9.9.9.9/tcp/42003',
+              '/ip4/9.9.9.9/tcp/42558/tls/sni/host.libp2p.direct/ws',
+              '/ip4/9.9.9.9/tcp/42558/ws'
+            ],
+            friendlyName: 'WS Node',
+            computeEnvironments: {
+              environments: [
+                {
+                  id: 'env-ws',
+                  consumerAddress: '0xCCC',
+                  fees: { '8453': [{ feeToken: '0xfee1', prices: [] }] },
+                  resources: []
+                }
+              ]
+            }
+          }
+        ]
+      }
+      fetchStub.resolves({ ok: true, json: async () => mockResponse } as any)
+
+      const result = await fetchPaidEnvironments()
+      const addrs = result[0].multiaddrs!
+
+      // WS/WSS addrs come first; the raw /tcp/ addr is last.
+      assert.ok(/\/wss?\//.test(addrs[0]), 'first addr should be a WebSocket addr')
+      assert.ok(addrs[addrs.length - 1].endsWith('/tcp/42003/p2p/node-ws'), 'raw TCP addr last')
+    })
   })
 
   suite('fetchComputeJobs', () => {

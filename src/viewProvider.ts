@@ -1064,6 +1064,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       if (mode === 'connected-paid' && connected) {
         envCard.classList.add('visible');
         let cpuVal = null, ramVal = null, diskVal = null, gpuVal = null;
+        const gpuModels = {}; // description (GPU name) -> selected count
         if (jobSummary?.resources && jobSummary.resources.length > 0) {
           for (const r of jobSummary.resources) {
             if (!r.id) continue;
@@ -1071,7 +1072,12 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
             else if (r.id.includes('ram')) ramVal = r.amount;
             else if (r.id.includes('disk')) diskVal = r.amount;
             // Anything else is a GPU (GPU resource ids are model/uuid, not 'gpu')
-            else gpuVal = (gpuVal || 0) + r.amount;
+            else {
+              gpuVal = (gpuVal || 0) + r.amount;
+              if (r.amount > 0 && r.description) {
+                gpuModels[r.description] = (gpuModels[r.description] || 0) + r.amount;
+              }
+            }
           }
         }
         // Available maxes from the env (selected / available, X/Y).
@@ -1098,16 +1104,22 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
             : sel + u;
           return '<div class="env-metric-cell"><div class="env-metric-val">' + val + '</div><div class="env-metric-lbl">' + label + '</div></div>';
         };
+        // Label the GPU cell with the actual model ("NVIDIA H200") instead of a
+        // generic "GPU" when a single model is selected; fall back to "GPU" for
+        // mixed models or when the name is unknown.
+        const gpuNames = Object.keys(gpuModels);
+        const gpuLabel = gpuNames.length === 1 ? gpuNames[0] : 'GPU';
+
         let cells = '';
         if (cpuVal != null) cells += metricCell(cpuVal, maxById.cpu, '', 'CPU');
         if (ramVal != null) cells += metricCell(ramVal, maxById.ram, 'GB', 'RAM');
         if (diskVal != null) cells += metricCell(diskVal, maxById.disk, 'GB', 'DISK');
-        if (gpuVal != null && gpuVal > 0) cells += metricCell(gpuVal, maxById.gpu, '', 'GPU');
+        if (gpuVal != null && gpuVal > 0) cells += metricCell(gpuVal, maxById.gpu, '', gpuLabel);
         if (maxRunStr != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + maxRunStr + '</div><div class="env-metric-lbl">MAX RUN</div></div>';
         envResources.innerHTML = cells ? '<div class="env-metric-grid">' + cells + '</div>' : '';
 
         const hasMax = maxById.cpu != null || maxById.ram != null || maxById.disk != null || maxById.gpu != null;
-        envHint.textContent = hasMax ? 'selected / available' : '';
+        envHint.textContent = hasMax ? 'Selected / Available' : '';
 
         const sym = envInfo.symbol || '';
         if (envInfo.loading) {

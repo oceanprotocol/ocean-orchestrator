@@ -538,6 +538,40 @@ function resourceBounds(env, id, defaults) {
   };
 }
 
+// "NVIDIA GeForce RTX 3090 | 15 CPU | 49 GB RAM | 125 GB disk" — the env's max
+// resources, GPUs shown by their actual name (description), not id ("gpu0").
+function envResourceSummary(env) {
+  const res = (env && env.resources) || [];
+  const maxOf = (r) => (r.max != null ? r.max : (r.maximum != null ? r.maximum : r.total));
+  const parts = [];
+  // Aggregate GPUs by name so 8 identical cards read "8× NVIDIA H200", not a
+  // repeated list. Distinct models stay separate ("4× H200 | 2× A100").
+  const gpuByName = {};
+  for (const r of res) {
+    const isGpu = (r.type || '').toLowerCase() === 'gpu' || (r.id || '').toLowerCase().includes('gpu');
+    if (!isGpu) { continue; }
+    const m = maxOf(r);
+    if (m == null || m <= 0) { continue; }
+    const name = r.description || r.id;
+    gpuByName[name] = (gpuByName[name] || 0) + m;
+  }
+  for (const name of Object.keys(gpuByName)) {
+    const n = gpuByName[name];
+    parts.push(n > 1 ? (n + '× ' + name) : name);
+  }
+  let cpu = null, ram = null, disk = null;
+  for (const r of res) {
+    const id = (r.id || '').toLowerCase();
+    if (id.includes('cpu')) { cpu = maxOf(r); }
+    else if (id.includes('ram')) { ram = maxOf(r); }
+    else if (id.includes('disk')) { disk = maxOf(r); }
+  }
+  if (cpu != null) { parts.push(cpu + ' CPU'); }
+  if (ram != null) { parts.push(ram + ' GB RAM'); }
+  if (disk != null) { parts.push(disk + ' GB disk'); }
+  return parts.join(' | ');
+}
+
 function applyEnvToSliders(env) {
   if (!env) return;
 
@@ -735,7 +769,9 @@ function populateEnvSelect(envs) {
   for (const env of envs) {
     const opt = document.createElement('option');
     opt.value = env.envId;
-    opt.textContent = env.label + ' (' + shortNodeId(env.nodeId) + ')';
+    const summary = envResourceSummary(env);
+    opt.textContent =
+      env.label + ' (' + shortNodeId(env.nodeId) + ')' + (summary ? ' — ' + summary : '');
     if (env.envId === state.selectedEnvId) opt.selected = true;
     sel.appendChild(opt);
   }
