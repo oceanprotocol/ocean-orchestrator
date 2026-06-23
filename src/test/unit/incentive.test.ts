@@ -148,9 +148,8 @@ suite('incentive helper', () => {
             isRunning: false,
             isFree: false,
             environment: 'env-name',
-            environmentId: 'env-a1',
-            dateCreated: 1700000000,
-            dateFinished: 1700001000,
+            dateCreated: '1700000000',
+            dateFinished: '1700001000',
             payment: { token: '0xfee1', cost: 0.5 },
             outputsURL: 'https://example.com/output'
           },
@@ -161,9 +160,8 @@ suite('incentive helper', () => {
             isRunning: true,
             isFree: true,
             environment: 'env-name-2',
-            environmentId: 'env-b1',
-            dateCreated: 1700002000,
-            dateFinished: 0,
+            dateCreated: '1700002000',
+            dateFinished: '0',
             payment: null,
             outputsURL: undefined
           }
@@ -181,17 +179,18 @@ suite('incentive helper', () => {
       assert.strictEqual(result[0].statusText, 'Finished')
       assert.strictEqual(result[0].isRunning, false)
       assert.strictEqual(result[0].isFree, false)
-      assert.strictEqual(result[0].environmentId, 'env-a1')
       assert.strictEqual(result[0].environment, 'env-name')
       assert.strictEqual(result[0].cost, 0.5)
+      // string epoch-seconds from the backend are coerced to numbers
       assert.strictEqual(result[0].dateCreated, 1700000000)
       assert.strictEqual(result[0].dateFinished, 1700001000)
       assert.strictEqual(result[0].outputsURL, 'https://example.com/output')
 
-      // payment null → cost undefined
+      // payment null → cost undefined; dateFinished "0" → undefined
       assert.strictEqual(result[1].cost, undefined)
       assert.strictEqual(result[1].isRunning, true)
       assert.strictEqual(result[1].isFree, true)
+      assert.strictEqual(result[1].dateFinished, undefined)
     })
 
     test('includes correct URL with address and sort param', async () => {

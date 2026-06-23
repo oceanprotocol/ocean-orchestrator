@@ -648,8 +648,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     }
     .env-metric-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
       margin-top: var(--sp-2);
     }
     .env-metric-cell {
@@ -658,10 +658,22 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       gap: 2px;
     }
     .env-metric-val {
-      font-size: 13px;
+      font-size: 12px;
       color: var(--vscode-foreground);
       font-weight: 600;
       line-height: 1.2;
+      white-space: nowrap;
+    }
+    .env-metric-val .mv-max {
+      font-size: 9px;
+      font-weight: 400;
+      color: var(--vscode-descriptionForeground);
+      margin-left: 2px;
+    }
+    .env-hint {
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+      margin-top: 2px;
     }
     .env-metric-lbl {
       font-size: 9px;
@@ -722,6 +734,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       <span id="envLabel" class="env-label">Selected environment</span>
       <button class="btn btn-sm btn-ghost" id="configureJobBtn">Configure &#9881;</button>
     </div>
+    <div id="envHint" class="env-hint"></div>
     <div class="env-resources" id="envResources"></div>
     <div id="envCost" class="text-xs" style="margin-top: var(--sp-2);"></div>
     <div id="envBalance" class="text-xs"></div>
@@ -804,6 +817,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     const dockerImageInput = document.getElementById('dockerImageInput');
     const dockerTagInput = document.getElementById('dockerTagInput');
     const envCard = document.getElementById('envCard');
+    const envHint = document.getElementById('envHint');
     const envResources = document.getElementById('envResources');
     const envCostEl = document.getElementById('envCost');
     const envBalanceEl = document.getElementById('envBalance');
@@ -1076,14 +1090,24 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           else if (s >= 60) maxRunStr = Math.round(s / 60) + 'm';
           else maxRunStr = s + 's';
         }
-        const xy = (sel, max) => (max != null ? sel + ' / ' + max : String(sel));
+        // Selected value stays prominent; "/ max" is a small muted suffix.
+        const metricCell = (sel, max, unit, label) => {
+          const u = unit ? ' ' + unit : '';
+          const val = max != null
+            ? sel + '<span class="mv-max">/ ' + max + u + '</span>'
+            : sel + u;
+          return '<div class="env-metric-cell"><div class="env-metric-val">' + val + '</div><div class="env-metric-lbl">' + label + '</div></div>';
+        };
         let cells = '';
-        if (cpuVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(cpuVal, maxById.cpu) + '</div><div class="env-metric-lbl">CPU</div></div>';
-        if (ramVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(ramVal, maxById.ram) + ' GB</div><div class="env-metric-lbl">RAM</div></div>';
-        if (diskVal != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(diskVal, maxById.disk) + ' GB</div><div class="env-metric-lbl">DISK</div></div>';
-        if (gpuVal != null && gpuVal > 0) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + xy(gpuVal, maxById.gpu) + '</div><div class="env-metric-lbl">GPU</div></div>';
+        if (cpuVal != null) cells += metricCell(cpuVal, maxById.cpu, '', 'CPU');
+        if (ramVal != null) cells += metricCell(ramVal, maxById.ram, 'GB', 'RAM');
+        if (diskVal != null) cells += metricCell(diskVal, maxById.disk, 'GB', 'DISK');
+        if (gpuVal != null && gpuVal > 0) cells += metricCell(gpuVal, maxById.gpu, '', 'GPU');
         if (maxRunStr != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + maxRunStr + '</div><div class="env-metric-lbl">MAX RUN</div></div>';
         envResources.innerHTML = cells ? '<div class="env-metric-grid">' + cells + '</div>' : '';
+
+        const hasMax = maxById.cpu != null || maxById.ram != null || maxById.disk != null || maxById.gpu != null;
+        envHint.textContent = hasMax ? 'selected / available' : '';
 
         const sym = envInfo.symbol || '';
         if (envInfo.loading) {

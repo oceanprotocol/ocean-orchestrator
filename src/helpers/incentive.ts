@@ -28,9 +28,9 @@ interface ComputeJob {
   isRunning: boolean
   isFree: boolean
   environment: string
-  environmentId: string
-  dateCreated: number
-  dateFinished: number
+  // The backend returns timestamps as strings (epoch seconds, fractional).
+  dateCreated: string
+  dateFinished: string
   payment?: { token?: string; cost?: number } | null
   outputsURL?: string
 }
@@ -105,11 +105,10 @@ export async function fetchComputeJobs(address: string): Promise<IncentiveJob[]>
     statusText: job.statusText,
     isRunning: job.isRunning,
     isFree: job.isFree,
-    environmentId: job.environmentId,
     environment: job.environment,
     cost: job.payment?.cost,
-    dateCreated: job.dateCreated,
-    dateFinished: job.dateFinished || undefined,
+    dateCreated: Number(job.dateCreated),
+    dateFinished: Number(job.dateFinished) || undefined,
     outputsURL: job.outputsURL
   }))
 }

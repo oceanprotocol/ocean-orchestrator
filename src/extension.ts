@@ -1379,8 +1379,10 @@ export async function activate(context: vscode.ExtensionContext) {
           outputChannel.show()
 
           let logResults: any[] = []
+          let statusText: string | undefined
           try {
             const status = await checkComputeStatus(probe, jobId)
+            statusText = status?.statusText
             logResults = (status?.results ?? []).filter((r: any) => !r.filename?.includes('.tar'))
           } catch {
           }
@@ -1407,9 +1409,18 @@ export async function activate(context: vscode.ExtensionContext) {
             wroteAny = await getComputeLogs(probe, jobId, outputChannel)
           }
           if (!wroteAny) {
-            outputChannel.appendLine(
-              'No logs available for this job. It may have finished in a previous session — logs require the node to still hold them and a valid session.'
-            )
+            const inProgress =
+              statusText && !/finish|complet|fail|timeout|stopp|error/i.test(statusText)
+            if (inProgress) {
+              outputChannel.appendLine(`Waiting for logs… Job status: ${statusText}.`)
+              outputChannel.appendLine(
+                'Logs appear once the algorithm container starts running. Run "View logs" again to refresh.'
+              )
+            } else {
+              outputChannel.appendLine(
+                'No logs available for this job. It may have finished in a previous session — logs require the node to still hold them and a valid session.'
+              )
+            }
           }
           outputChannel.show()
         } catch (e) {

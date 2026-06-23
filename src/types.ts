@@ -51,7 +51,6 @@ export type IncentiveJob = {
   statusText: string
   isRunning: boolean
   isFree: boolean
-  environmentId: string
   environment: string
   cost?: number
   dateCreated: number

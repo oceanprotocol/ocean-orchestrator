@@ -584,7 +584,8 @@ function applyEnvToSliders(env) {
         scheduleCostEstimate();
       });
       const span = document.createElement('span');
-      span.textContent = gr.label || gr.id;
+      // Show the actual GPU name (e.g. "NVIDIA H200"), not the id ("gpu0").
+      span.textContent = gr.description || gr.label || gr.id;
       item.appendChild(cb);
       item.appendChild(span);
       gpuChecks.appendChild(item);

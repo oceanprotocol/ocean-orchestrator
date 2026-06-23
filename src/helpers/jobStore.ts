@@ -46,23 +46,15 @@ function mapStatus(
 ): JobView['status'] {
   if (isRunning) { return 'Running' }
 
-  switch (statusText.toLowerCase()) {
-    case 'running':
-      return 'Running'
-    case 'completed':
-    case 'finished':
-      return 'Completed'
-    case 'failed':
-    case 'timeout':
-      return 'Failed'
-    case 'stopped':
-      return 'Stopped'
-    case 'pending':
-    case 'queued':
-    case 'provisioning':
-    default:
-      return 'Queued'
-  }
+  // The node returns phrases ("Job finished", "Building algorithm image
+  // failed"), not bare status words, so match on substrings. Failure is
+  // checked first so "finished with errors" reads as Failed.
+  const s = (statusText ?? '').toLowerCase()
+  if (/fail|error|timeout/.test(s)) { return 'Failed' }
+  if (/finish|complet/.test(s)) { return 'Completed' }
+  if (/stop/.test(s)) { return 'Stopped' }
+  if (/runn/.test(s)) { return 'Running' }
+  return 'Queued'
 }
 
 function statusRank(s: JobView['status']): number {
@@ -79,26 +71,35 @@ export function mergeJobs(
   local: LocalJobRecord[],
   incentive: IncentiveJob[]
 ): JobView[] {
+  // The id saved locally (from the node response) and the id the incentive
+  // backend stores can differ by case or stray whitespace. Dedup on a
+  // normalized key so a single job never renders twice — once "from
+  // localStorage" and once "from envs".
+  const norm = (id: string) => id.trim().toLowerCase()
+
   const incentiveMap = new Map<string, IncentiveJob>()
   for (const job of incentive) {
-    incentiveMap.set(job.jobId, job)
+    incentiveMap.set(norm(job.jobId), job)
   }
 
-  const localMap = new Map<string, LocalJobRecord>()
-  for (const rec of local) {
-    localMap.set(rec.jobId, rec)
-  }
-
-  const views: JobView[] = []
+  // One output entry per normalized id, so repeated ids within the local
+  // store also collapse (the old code only deduped local-vs-incentive).
+  const byId = new Map<string, JobView>()
 
   for (const rec of local) {
-    const inc = incentiveMap.get(rec.jobId)
+    const key = norm(rec.jobId)
+    if (byId.has(key)) {
+      continue
+    }
+    const inc = incentiveMap.get(key)
     if (inc) {
       const localStatus = mapStatus(rec.status ?? 'queued', false)
       const incStatus = mapStatus(inc.statusText, inc.isRunning)
       const status = statusRank(localStatus) >= statusRank(incStatus) ? localStatus : incStatus
-      views.push({
-        jobId: rec.jobId,
+      byId.set(key, {
+        // Surface the incentive id: it is the canonical on-node form that
+        // View logs / Download / status reads must use.
+        jobId: inc.jobId,
         name: rec.name,
         status,
         envLabel: inc.environment || rec.envLabel,
@@ -109,11 +110,10 @@ export function mergeJobs(
         isLocalOnly: false
       })
     } else {
-      const localStatus = mapStatus(rec.status ?? 'queued', false)
-      views.push({
+      byId.set(key, {
         jobId: rec.jobId,
         name: rec.name,
-        status: localStatus,
+        status: mapStatus(rec.status ?? 'queued', false),
         envLabel: rec.envLabel,
         cost: rec.cost,
         createdAt: rec.createdAt,
@@ -123,21 +123,24 @@ export function mergeJobs(
   }
 
   for (const inc of incentive) {
-    if (!localMap.has(inc.jobId)) {
-      views.push({
-        jobId: inc.jobId,
-        name: inc.jobId,
-        status: mapStatus(inc.statusText, inc.isRunning),
-        envLabel: inc.environment || inc.environmentId,
-        cost: inc.cost,
-        createdAt: inc.dateCreated,
-        finishedAt: inc.dateFinished,
-        outputsURL: inc.outputsURL,
-        isLocalOnly: false
-      })
+    const key = norm(inc.jobId)
+    if (byId.has(key)) {
+      continue
     }
+    byId.set(key, {
+      jobId: inc.jobId,
+      name: inc.jobId,
+      status: mapStatus(inc.statusText, inc.isRunning),
+      envLabel: inc.environment,
+      cost: inc.cost,
+      createdAt: inc.dateCreated,
+      finishedAt: inc.dateFinished,
+      outputsURL: inc.outputsURL,
+      isLocalOnly: false
+    })
   }
 
+  const views = [...byId.values()]
   views.sort((a, b) => b.createdAt - a.createdAt)
 
   return views
