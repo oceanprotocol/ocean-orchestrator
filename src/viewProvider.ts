@@ -292,7 +292,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
             case 'stopJob':
               await vscode.commands.executeCommand(
                 'ocean-protocol.stopComputeJob',
-                this.config?.authToken
+                data.jobId
               )
               break
             case 'getJobs':
@@ -810,8 +810,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     let projectType = null; // Language enum value; 'Docker Image' => show docker fields
     // The Dockerfile project type — docker image/tag fields are shown only for it.
     const DOCKER_PROJECT_TYPE = '${Language.DOCKER_IMAGE}';
-    let isRunning = false;
-    let elapsedSeconds = 0;
     let runningJobId = null;
     const JOBS_PAGE = 6;
     let jobsShown = JOBS_PAGE;
@@ -1190,22 +1188,31 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    // Effective status of a job: the session's running job shows as Running even
+    // before the incentive backend reflects it.
+    function jobEffStatus(j) {
+      return j.jobId === runningJobId ? 'Running' : (j.status || 'Queued');
+    }
+
+    // The selected job, but only when it is currently Running (i.e. stoppable).
+    function selectedLiveJob() {
+      const j = selectedJobId ? jobs.find((x) => x.jobId === selectedJobId) : null;
+      return j && jobEffStatus(j) === 'Running' ? j : null;
+    }
+
     function renderJobActions() {
       const selectedJob = selectedJobId ? jobs.find((j) => j.jobId === selectedJobId) : null;
-      const effStatus = selectedJob
-        ? (selectedJob.jobId === runningJobId ? 'Running' : (selectedJob.status || 'Queued'))
-        : null;
+      const effStatus = selectedJob ? jobEffStatus(selectedJob) : null;
 
       // Download: enabled only when the selected job is Completed or has outputsURL.
-      // (Stop lives on the primary Run button, in place, while a job runs.)
       const canDownload = selectedJob && (effStatus === 'Completed' || !!selectedJob.outputsURL);
       downloadBtn.disabled = !canDownload;
     }
 
     function renderRunBtn() {
       const hasProject = !!projectPath;
-      if (runningJobId) {
-        // A job is running — the primary button becomes Stop, in place.
+      if (selectedLiveJob()) {
+        // The selected job is running — the primary button stops that job, in place.
         runBtn.textContent = '\\u25A0 Stop job';
         runBtn.classList.add('btn-danger');
         runBtn.disabled = false;
@@ -1219,12 +1226,18 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    // Elapsed time for the SELECTED running job, derived from its createdAt (the
+    // single source of truth) and ticked once a second while it's shown.
     function renderTimer() {
-      if (isRunning) {
+      const live = selectedLiveJob();
+      if (live) {
+        const secs = Math.max(0, Math.floor((Date.now() - toMs(live.createdAt)) / 1000));
+        elapsedTimerEl.textContent = fmtElapsed(secs) + ' elapsed';
         elapsedTimerEl.style.display = 'block';
-        elapsedTimerEl.textContent = fmtElapsed(elapsedSeconds) + ' elapsed';
+        if (!timerInterval) { timerInterval = setInterval(renderTimer, 1000); }
       } else {
         elapsedTimerEl.style.display = 'none';
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
       }
     }
 
@@ -1233,12 +1246,9 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         jobsListEl.innerHTML = '<div class="no-jobs">No jobs yet</div>';
         return;
       }
-      // The actively-running job (this session) shows as Running even before the
-      // incentive backend reflects it.
-      const effStatus = (j) => (j.jobId === runningJobId ? 'Running' : (j.status || 'Queued'));
       // Running job pinned top
       const sorted = [...jobs].sort((a, b) => {
-        const ar = effStatus(a) === 'Running', br = effStatus(b) === 'Running';
+        const ar = jobEffStatus(a) === 'Running', br = jobEffStatus(b) === 'Running';
         if (ar && !br) return -1;
         if (br && !ar) return 1;
         return toMs(b.createdAt) - toMs(a.createdAt);
@@ -1247,7 +1257,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       const visible = sorted.slice(0, jobsShown);
       let html = visible.map((j) => {
         const sel = j.jobId === selectedJobId ? ' selected' : '';
-        const status = effStatus(j);
+        const status = jobEffStatus(j);
         const sc = statusClass(status);
         const shortName = j.name && j.name !== j.jobId
           ? j.name
@@ -1274,6 +1284,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           const id = el.getAttribute('data-id');
           selectedJobId = id;
           renderJobActions();
+          renderRunBtn();
+          renderTimer();
           renderJobs();
           vscode.postMessage({ type: 'selectJob', jobId: id });
           vscode.postMessage({ type: 'viewJobLogs', jobId: id });
@@ -1306,23 +1318,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     }
 
     // -------------------------------------------------------------------------
-    // Timer management
-    // -------------------------------------------------------------------------
-    function startTimer() {
-      elapsedSeconds = 0;
-      clearInterval(timerInterval);
-      timerInterval = setInterval(() => {
-        elapsedSeconds++;
-        renderTimer();
-      }, 1000);
-    }
-
-    function stopTimer() {
-      clearInterval(timerInterval);
-      timerInterval = null;
-    }
-
-    // -------------------------------------------------------------------------
     // Event handlers
     // -------------------------------------------------------------------------
     refreshBtn.addEventListener('click', () => {
@@ -1344,8 +1339,9 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     });
 
     runBtn.addEventListener('click', () => {
-      if (runningJobId) {
-        vscode.postMessage({ type: 'stopJob' });
+      const live = selectedLiveJob();
+      if (live) {
+        vscode.postMessage({ type: 'stopJob', jobId: live.jobId });
         return;
       }
       const showDocker = projectType === DOCKER_PROJECT_TYPE;
@@ -1478,6 +1474,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
             setRefreshInFlight(false);
           }
           renderJobActions();
+          renderRunBtn();
+          renderTimer();
           renderJobs();
           break;
 
@@ -1487,7 +1485,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'jobStarted':
-          isRunning = true;
           runningJobId = msg.jobId || null;
           // Auto-select the started job so Stop/logs appear immediately
           if (runningJobId) {
@@ -1495,7 +1492,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ type: 'selectJob', jobId: runningJobId });
             vscode.postMessage({ type: 'viewJobLogs', jobId: runningJobId });
           }
-          startTimer();
           renderStatus();
           renderRunBtn();
           renderTimer();
@@ -1504,17 +1500,11 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'jobRunning':
-          isRunning = true;
-          if (msg.elapsed != null) {
-            elapsedSeconds = msg.elapsed;
-            renderTimer();
-          }
+          renderTimer();
           break;
 
         case 'jobStopped':
-          isRunning = false;
           runningJobId = null;
-          stopTimer();
           renderStatus();
           renderRunBtn();
           renderTimer();
@@ -1524,9 +1514,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'jobCompleted':
-          isRunning = false;
           runningJobId = null;
-          stopTimer();
           renderStatus();
           renderRunBtn();
           renderTimer();

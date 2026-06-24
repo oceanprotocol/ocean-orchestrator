@@ -854,6 +854,11 @@ window.addEventListener('message', (event) => {
           state.gpuSelections[id] = true;
         }
       }
+      if (data.dataset) {
+        state.dataset = data.dataset;
+        const di = document.getElementById('datasetInput');
+        if (di) di.value = data.dataset;
+      }
       // If envs already loaded (snapshot arrived after listEnvs), re-apply.
       if (state.envs.length > 0) populateEnvSelect(state.envs);
       return;

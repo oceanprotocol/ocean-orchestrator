@@ -334,7 +334,7 @@ export async function activate(context: vscode.ExtensionContext) {
             environments.find((e: { id?: string }) => e.id === config.environmentId) ??
             environments[0]
           config.updateFields({
-            environmentId: config.environmentId || env.id,
+            environmentId: env.id,
             resources: getDefaultResourcesFromFreeEnv(env),
             jobDuration: String(env?.free?.maxJobDuration ?? 7200)
           })
@@ -358,19 +358,28 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.commands.registerCommand(
         'ocean-protocol.stopComputeJob',
-        async (authToken: string) => {
-          if (!savedJobId) {
-            vscode.window.showErrorMessage('No active job to stop')
+        async (jobId?: string) => {
+          // Stop the requested job (selected in the sidebar); fall back to the
+          // session's own job when no id is passed.
+          const targetId = jobId || savedJobId
+          if (!targetId) {
+            vscode.window.showErrorMessage('No job to stop')
+            return
+          }
+          // Resolve the job's node + auth from its local record (same source the
+          // status poller uses), so we can stop a specific job, not just the
+          // session's. Fall back to the current config for the session's job.
+          const localJob = getLocalJobs(context).find((j) => j.jobId === targetId)
+          const nodeUri = localJob?.nodeUri ?? config.multiaddresses?.[0]
+          const stopAuth = localJob?.authToken ?? config.authToken
+          if (!nodeUri) {
+            vscode.window.showErrorMessage('Cannot stop this job: its node is unknown.')
             return
           }
           try {
-            await stopComputeJob(
-              config.multiaddresses,
-              savedJobId,
-              authToken || savedSigner
-            )
+            await stopComputeJob([nodeUri], targetId, stopAuth || savedSigner)
             trackEvent(config.address!, 'compute_job_stopped', {
-              job_id: savedJobId
+              job_id: targetId
             })
             vscode.window.showInformationMessage('Job stopped successfully')
           } catch (error) {
@@ -378,12 +387,13 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage('Failed to stop job')
             return
           }
-          const stoppedId = savedJobId
-          savedJobId = null
-          if (stoppedId) {
-            await updateLocalJobStatus(context, stoppedId, 'Stopped')
+          // Only clear session state + stop the timer when we stopped the
+          // session's own job; otherwise just refresh the list.
+          if (targetId === savedJobId) {
+            savedJobId = null
+            provider.sendMessage({ type: 'jobStopped' })
           }
-          provider.sendMessage({ type: 'jobStopped' })
+          await updateLocalJobStatus(context, targetId, 'Stopped')
           onJobLifecycleEvent?.().catch(() => {})
         }
       )
@@ -458,7 +468,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         const progressOptions = {
           location: vscode.ProgressLocation.Notification,
-          title: 'Compute Job Status',
+          title: pendingJobName ? `Compute Job: ${pendingJobName}` : 'Compute Job Status',
           cancellable: false
         }
         console.log('Progress options:', progressOptions)
@@ -477,11 +487,11 @@ export async function activate(context: vscode.ExtensionContext) {
             const directoryContents = await listDirectoryContents(algorithmDir)
             let additionalDockerFiles: { [key: string]: string } = {}
 
-            directoryContents.forEach(async (file) => {
+            for (const file of directoryContents) {
               if (file !== 'Dockerfile') {
                 additionalDockerFiles[file] = await checkAndReadFile(algorithmDir, file)
               }
-            })
+            }
 
             const envContent = await checkAndReadFile(algorithmDir, '.env')
             const envVars: Record<string, string> = {}
@@ -597,6 +607,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 await updateLocalJobStatus(context, jobId, 'Failed')
                 savedJobId = null
                 provider.sendMessage({ type: 'jobStopped' })
+                onJobLifecycleEvent?.().catch(() => {})
 
                 return
               }
@@ -697,6 +708,7 @@ export async function activate(context: vscode.ExtensionContext) {
             await updateLocalJobStatus(context, failedId, 'Failed')
           }
           provider.sendMessage({ type: 'jobStopped' })
+          onJobLifecycleEvent?.().catch(() => {})
 
           if (error instanceof Error && error.message) {
             vscode.window.showErrorMessage(error.message)
@@ -1112,7 +1124,8 @@ export async function activate(context: vscode.ExtensionContext) {
           gpuIds: (config.resources || [])
             .filter((r) => !['cpu', 'ram', 'disk'].includes(r.id))
             .map((r) => r.id),
-          durationSeconds: config.jobDuration ? Number(config.jobDuration) : undefined
+          durationSeconds: config.jobDuration ? Number(config.jobDuration) : undefined,
+          dataset: config.dataset
         })
       })
     )
@@ -1169,13 +1182,18 @@ export async function activate(context: vscode.ExtensionContext) {
               authToken: job.authToken ?? config.authToken
             })
             const st = await checkComputeStatus(probe, job.jobId)
+            // Ocean C2D status codes: <10 = queued (0 started, 1 queued),
+            // >=70 = finished, in between = actively running (pulling/building/
+            // provisioning/running). Use the code, not the phrase — statusText
+            // like "Building algorithm image" doesn't contain the word "running".
             const text = (st?.statusText ?? '').toLowerCase()
+            const code = st?.status ?? 0
             let mapped: string
-            if (text.includes('error') || text.includes('failed')) {
+            if (text.includes('fail') || text.includes('error')) {
               mapped = 'Failed'
-            } else if (st?.dateFinished) {
+            } else if (st?.dateFinished || code >= 70) {
               mapped = 'Completed'
-            } else if (text.includes('running')) {
+            } else if (code >= 10) {
               mapped = 'Running'
             } else {
               mapped = 'Queued'
@@ -1315,7 +1333,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
           if (!config.environmentId || !config.resources) {
             config.updateFields({
-              environmentId: config.environmentId || env.id,
+              environmentId: env.id,
               resources: getDefaultResourcesFromFreeEnv(env),
               jobDuration: String(env?.free?.maxJobDuration ?? 7200)
             })
