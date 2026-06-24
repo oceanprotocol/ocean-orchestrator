@@ -51,7 +51,7 @@ import {
   requestJobRefresh
 } from './helpers/incentive'
 import { estimateCost } from './helpers/cost'
-import { getEscrowBalance, getTokenSymbol } from './helpers/escrow'
+import { getEscrowBalance, getTokenSymbol, invalidateEscrowBalance } from './helpers/escrow'
 import { generateJobName } from './helpers/jobNames'
 import {
   addLocalJob,
@@ -552,6 +552,7 @@ export async function activate(context: vscode.ExtensionContext) {
               type: 'jobStarted',
               jobId: jobId
             })
+            invalidateEscrowBalance() // funds were just locked — read fresh
             pushEnvInfo()
 
             outputChannel.show()
@@ -1147,6 +1148,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     onJobLifecycleEvent = async () => {
+      invalidateEscrowBalance() // job settled/stopped/failed — balance changed
       await loadJobs()
       await pushEnvInfo()
     }

@@ -24,7 +24,24 @@ export async function getTokenDecimals(feeToken: string): Promise<number> {
   return decimals
 }
 
+// Escrow balance changes on-chain, so cache it only briefly: this dedups the
+// burst where the panel and the sidebar (pushEnvInfo) read the same balance
+// within ~1s, while staying short enough that the panel's ~10s poll refreshes.
+// Job start/finish call invalidateEscrowBalance() to force a fresh read.
+const balanceCache = new Map<string, { value: number; at: number }>()
+const BALANCE_TTL_MS = 5_000
+
+export function invalidateEscrowBalance(): void {
+  balanceCache.clear()
+}
+
 export async function getEscrowBalance(feeToken: string, payerAddress: string): Promise<number> {
+  const key = `${(feeToken || '').toLowerCase()}|${(payerAddress || '').toLowerCase()}`
+  const cached = balanceCache.get(key)
+  if (cached && Date.now() - cached.at < BALANCE_TTL_MS) {
+    return cached.value
+  }
+
   const provider = new ethers.JsonRpcProvider(getBaseRpcUrl())
 
   const escrow = new EscrowContract(ESCROW_ADDRESS_BASE, provider as any, undefined)
@@ -34,7 +51,9 @@ export async function getEscrowBalance(feeToken: string, payerAddress: string): 
 
   const decimals = await getTokenDecimals(feeToken)
 
-  return formatUnitsToNumber(available, decimals)
+  const balance = formatUnitsToNumber(available, decimals)
+  balanceCache.set(key, { value: balance, at: Date.now() })
+  return balance
 }
 
 const symbolCache = new Map<string, string>()

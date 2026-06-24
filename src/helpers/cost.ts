@@ -5,23 +5,35 @@ import { formatUnitsToNumber as denominateCost, getTokenDecimals } from './escro
 
 export { denominateCost }
 
+// Cost is deterministic for the same env/resources/duration/token, so cache it
+// briefly: the sidebar (pushEnvInfo) and the panel ask for the identical
+// estimate within ~1s of each other, and that would otherwise be two node calls.
+type CostResult = { cost: number; minLockSeconds: number }
+const costCache = new Map<string, { value: CostResult; at: number }>()
+const COST_TTL_MS = 60_000
+
 export async function estimateCost(args: {
   env: EnvSummary
   resources: { id: string; amount: number }[]
   durationSeconds: number
   feeToken: string
-}): Promise<{ cost: number; minLockSeconds: number }> {
+}): Promise<CostResult> {
   const { env, resources, durationSeconds, feeToken } = args
 
   const validUntil = Math.max(1, Math.ceil(durationSeconds))
+  const cleanResources = resources.map((r) => ({ id: r.id, amount: r.amount }))
+
+  const cacheKey = `${env.envId}|${feeToken}|${validUntil}|${JSON.stringify(cleanResources)}`
+  const cached = costCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < COST_TTL_MS) {
+    return cached.value
+  }
 
   const addrs = env.multiaddrs ?? []
   const nodeUri = addrs.find((a) => a.includes('/p2p/')) ?? addrs[0]
   if (!nodeUri) {
     throw new Error('estimateCost: selected environment has no node address')
   }
-
-  const cleanResources = resources.map((r) => ({ id: r.id, amount: r.amount }))
 
   const result = await ProviderInstance.initializeCompute(
     [],
@@ -50,5 +62,7 @@ export async function estimateCost(args: {
 
   const cost = denominateCost(String(amount), decimals)
 
-  return { cost, minLockSeconds }
+  const value = { cost, minLockSeconds }
+  costCache.set(cacheKey, { value, at: Date.now() })
+  return value
 }
