@@ -186,7 +186,8 @@ suite('incentive helper', () => {
             dateCreated: '1700000000',
             dateFinished: '1700001000',
             payment: { token: '0xfee1', cost: 0.5 },
-            outputsURL: 'https://example.com/output'
+            outputsURL: 'https://example.com/output',
+            metadata: { name: 'brave-otter' }
           },
           {
             jobId: 'job-2',
@@ -220,12 +221,15 @@ suite('incentive helper', () => {
       assert.strictEqual(result[0].dateCreated, 1700000000)
       assert.strictEqual(result[0].dateFinished, 1700001000)
       assert.strictEqual(result[0].outputsURL, 'https://example.com/output')
+      // friendly name persisted in metadata round-trips back
+      assert.strictEqual(result[0].name, 'brave-otter')
 
-      // payment null → cost undefined; dateFinished "0" → undefined
+      // payment null → cost undefined; dateFinished "0" → undefined; no metadata → no name
       assert.strictEqual(result[1].cost, undefined)
       assert.strictEqual(result[1].isRunning, true)
       assert.strictEqual(result[1].isFree, true)
       assert.strictEqual(result[1].dateFinished, undefined)
+      assert.strictEqual(result[1].name, undefined)
     })
 
     test('includes correct URL with address and sort param', async () => {

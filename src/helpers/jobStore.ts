@@ -71,15 +71,19 @@ export function mergeJobs(
   local: LocalJobRecord[],
   incentive: IncentiveJob[]
 ): JobView[] {
-  // The id saved locally (from the node response) and the id the incentive
-  // backend stores can differ by case or stray whitespace. Dedup on a
-  // normalized key so a single job never renders twice — once "from
-  // localStorage" and once "from envs".
-  const norm = (id: string) => id.trim().toLowerCase()
+  // computeStart returns jobIds as "<clusterHash>-<id>", but getComputeStatus
+  // and the incentive backend use the bare <id>. Dedup on the bare id (the part
+  // after the first '-', mirroring the node) plus trim/lowercase, so the two
+  // forms of the same job never render twice.
+  const bareId = (id: string) => {
+    const s = (id ?? '').trim()
+    const i = s.indexOf('-')
+    return (i > 0 ? s.slice(i + 1) : s).toLowerCase()
+  }
 
   const incentiveMap = new Map<string, IncentiveJob>()
   for (const job of incentive) {
-    incentiveMap.set(norm(job.jobId), job)
+    incentiveMap.set(bareId(job.jobId), job)
   }
 
   // One output entry per normalized id, so repeated ids within the local
@@ -87,7 +91,7 @@ export function mergeJobs(
   const byId = new Map<string, JobView>()
 
   for (const rec of local) {
-    const key = norm(rec.jobId)
+    const key = bareId(rec.jobId)
     if (byId.has(key)) {
       continue
     }
@@ -97,10 +101,12 @@ export function mergeJobs(
       const incStatus = mapStatus(inc.statusText, inc.isRunning)
       const status = statusRank(incStatus) >= statusRank(localStatus) ? incStatus : localStatus
       byId.set(key, {
-        // Surface the incentive id: it is the canonical on-node form that
-        // View logs / Download / status reads must use.
-        jobId: inc.jobId,
-        name: rec.name,
+        // Keep the local id: it carries the "<clusterHash>-<id>" prefix the node
+        // needs to route View logs / Download / status to the right cluster.
+        jobId: rec.jobId,
+        // Backend-persisted name (metadata.name) is authoritative; local name
+        // is the fallback until the monitor indexes the fresh job.
+        name: inc.name || rec.name,
         status,
         envLabel: inc.environment || rec.envLabel,
         cost: inc.cost ?? rec.cost,
@@ -123,13 +129,15 @@ export function mergeJobs(
   }
 
   for (const inc of incentive) {
-    const key = norm(inc.jobId)
+    const key = bareId(inc.jobId)
     if (byId.has(key)) {
       continue
     }
     byId.set(key, {
       jobId: inc.jobId,
-      name: inc.jobId,
+      // Show the persisted friendly name (metadata.name); fall back to the raw
+      // jobId for jobs started before naming existed.
+      name: inc.name || inc.jobId,
       status: mapStatus(inc.statusText, inc.isRunning),
       envLabel: inc.environment,
       cost: inc.cost,

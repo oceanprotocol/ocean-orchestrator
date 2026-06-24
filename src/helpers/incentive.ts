@@ -33,6 +33,7 @@ interface ComputeJob {
   dateFinished: string
   payment?: { token?: string; cost?: number } | null
   outputsURL?: string
+  metadata?: { [key: string]: string | number | boolean }
 }
 
 // The extension's libp2p dials WebSockets, not raw TCP. Nodes advertise both
@@ -119,7 +120,9 @@ export async function fetchComputeJobs(address: string): Promise<IncentiveJob[]>
     cost: job.payment?.cost,
     dateCreated: Number(job.dateCreated) || 0,
     dateFinished: Number(job.dateFinished) || undefined,
-    outputsURL: job.outputsURL
+    outputsURL: job.outputsURL,
+    // Friendly name persisted on the job at start (metadata.name).
+    name: job.metadata?.name ? String(job.metadata.name) : undefined
   }))
 }
 

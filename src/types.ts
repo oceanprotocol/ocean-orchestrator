@@ -62,6 +62,7 @@ export type IncentiveJob = {
   dateCreated: number
   dateFinished?: number
   outputsURL?: string
+  name?: string
 }
 
 export type LocalJobRecord = {

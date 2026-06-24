@@ -179,7 +179,8 @@ export async function computeStart(
     [key: string]: string
   },
   additionalAssets?: ComputeAsset[],
-  outputBucketId?: string
+  outputBucketId?: string,
+  jobName?: string
 ): Promise<ComputeJob> {
   try {
     const container = getContainerConfig(
@@ -212,6 +213,10 @@ export async function computeStart(
     // the dashboard; the node only accepts { id, amount }.
     const submitResources = config.resources?.map((r) => ({ id: r.id, amount: r.amount }))
 
+    // Persist the friendly job name on the job itself (round-trips via the node
+    // → monitor → incentive backend), so it survives reloads and other devices.
+    const metadata = jobName ? { name: jobName } : undefined
+
     if (!config.isFreeCompute) {
       const computeJob = await ProviderInstance.computeStart(
         uri,
@@ -223,7 +228,7 @@ export async function computeStart(
         config.feeToken!,
         submitResources!,
         config.chainId!,
-        undefined, // metadata
+        metadata,
         undefined, // additionalViewers
         undefined, // output
         undefined, // policyServer
@@ -242,7 +247,7 @@ export async function computeStart(
       datasets,
       algorithm,
       submitResources,
-      undefined, // metadata
+      metadata,
       undefined, // additionalViewers
       undefined, // output
       undefined, // policyServer

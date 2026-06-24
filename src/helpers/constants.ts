@@ -23,8 +23,8 @@ export const SUPPORTED_TOKENS_BASE: { symbol: string; address: string; decimals:
   { symbol: 'COMPY', address: '0x5494711392a67DA50D3bC7b1fcC2d1877cFaA4d2', decimals: 6 }
 ]
 
-export function nodeFundingUrl(nodeId: string): string {
-  return `${DASHBOARD_URL}/nodes/${nodeId}`
+export function escrowFundingUrl(): string {
+  return `${DASHBOARD_URL}/profile/escrow`
 }
 
 export function dashboardConnectUrl(): string {

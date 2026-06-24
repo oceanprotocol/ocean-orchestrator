@@ -216,18 +216,28 @@ suite('jobStore — mergeJobs (pure)', () => {
     assert.strictEqual(result.length, 1)
   })
 
-  test('deduplication is case- and whitespace-insensitive (one job, not two)', () => {
-    // Real-world: the incentive backend returns clean lowercase-hex ids; the
-    // locally-saved id may differ by case or stray whitespace, which used to
-    // produce a duplicate (one "from localStorage", one "from envs").
-    const local = [makeLocal({ jobId: '  ABC123  ', name: 'Mine', status: 'Running' })]
-    const incentive = [makeIncentive({ jobId: 'abc123', statusText: 'completed', isRunning: false })]
+  test('node hash-prefixed local id dedupes against bare incentive id', () => {
+    // computeStart returns "<clusterHash>-<id>"; getComputeStatus and the
+    // incentive backend use the bare <id>. These are the same job and must not
+    // double-show (the original duplicate-jobs bug).
+    const local = [makeLocal({ jobId: 'a1b2c3-ea4098', name: 'Mine', status: 'Running' })]
+    const incentive = [makeIncentive({ jobId: 'ea4098', statusText: 'completed', isRunning: false })]
 
     const result = mergeJobs(local, incentive)
     assert.strictEqual(result.length, 1) // ONE job, not two
     assert.strictEqual(result[0].name, 'Mine') // local name kept
-    assert.strictEqual(result[0].status, 'Completed') // most-progressed status wins
-    assert.strictEqual(result[0].jobId, 'abc123') // canonical (incentive) id surfaced
+    assert.strictEqual(result[0].status, 'Completed') // backend status wins
+    // Local prefixed id is kept — the node needs the hash to route status/logs.
+    assert.strictEqual(result[0].jobId, 'a1b2c3-ea4098')
+  })
+
+  test('dedup is case- and whitespace-insensitive', () => {
+    const local = [makeLocal({ jobId: '  ABC123  ', name: 'Mine', status: 'Running' })]
+    const incentive = [makeIncentive({ jobId: 'abc123', statusText: 'completed', isRunning: false })]
+
+    const result = mergeJobs(local, incentive)
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].status, 'Completed')
   })
 
   test('duplicate ids within the local store collapse to one entry', () => {
@@ -253,5 +263,21 @@ suite('jobStore — mergeJobs (pure)', () => {
     const result = mergeJobs([], incentive)
 
     assert.strictEqual(result[0].name, 'inc-only-fallback')
+  })
+
+  test('incentive-only job uses persisted metadata name when present', () => {
+    const incentive = [makeIncentive({ jobId: 'abc123', name: 'brave-otter' })]
+    const result = mergeJobs([], incentive)
+
+    assert.strictEqual(result[0].name, 'brave-otter')
+  })
+
+  test('matched job prefers backend metadata name over the local name', () => {
+    const local = [makeLocal({ jobId: 'h-abc123', name: 'local-name' })]
+    const incentive = [makeIncentive({ jobId: 'abc123', name: 'backend-name' })]
+    const result = mergeJobs(local, incentive)
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].name, 'backend-name')
   })
 })

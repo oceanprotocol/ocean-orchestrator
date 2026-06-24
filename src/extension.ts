@@ -61,7 +61,7 @@ import {
   getSelectedJobId,
   setSelectedJobId
 } from './helpers/jobStore'
-import { BASE_CHAIN_ID, nodeFundingUrl, dashboardConnectUrl } from './helpers/constants'
+import { BASE_CHAIN_ID, escrowFundingUrl, dashboardConnectUrl } from './helpers/constants'
 
 // @oceanprotocol/lib bundles libp2p's browser user-agent helper which reads
 // globalThis.navigator.userAgent. VSCode's extension host defines `navigator`
@@ -511,7 +511,8 @@ export async function activate(context: vscode.ExtensionContext) {
               additionalDockerFiles,
               envVars,
               persistentAssets,
-              outputBucketId
+              outputBucketId,
+              pendingJobName
             )
             console.log('Compute result received:', computeResponse)
             const jobId = computeResponse.jobId
@@ -1080,7 +1081,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return
           }
           case 'openFunding': {
-            vscode.env.openExternal(vscode.Uri.parse(nodeFundingUrl(data.nodeId)))
+            vscode.env.openExternal(vscode.Uri.parse(escrowFundingUrl()))
             reply({ type: 'fundingOpened', requestId })
             return
           }
