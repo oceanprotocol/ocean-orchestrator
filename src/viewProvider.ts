@@ -856,6 +856,24 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    // Resource id -> kind. GPU resource ids are model/uuid strings, so anything
+    // that isn't cpu/ram/disk is treated as a GPU.
+    function resourceKind(id) {
+      const s = (id || '').toLowerCase();
+      if (s.includes('cpu')) return 'cpu';
+      if (s.includes('ram')) return 'ram';
+      if (s.includes('disk')) return 'disk';
+      return 'gpu';
+    }
+
+    function fmtDuration(sec) {
+      const s = Number(sec);
+      if (!s) return null;
+      if (s >= 3600) return Math.round(s / 3600) + 'h';
+      if (s >= 60) return Math.round(s / 60) + 'm';
+      return s + 's';
+    }
+
     function statusClass(s) {
       if (!s) return 'stopped';
       switch (s.toLowerCase()) {
@@ -1007,21 +1025,16 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       if (defaultEnv.resources && defaultEnv.resources.length > 0) {
         for (const r of defaultEnv.resources) {
           const val = r.available != null ? r.available : r.max;
-          if (r.id && r.id.includes('cpu')) cpuVal = val;
-          else if (r.id && r.id.includes('ram')) ramVal = val;
-          else if (r.id && r.id.includes('disk')) diskVal = val;
+          const kind = resourceKind(r.id);
+          if (kind === 'cpu') cpuVal = val;
+          else if (kind === 'ram') ramVal = val;
+          else if (kind === 'disk') diskVal = val;
           // Anything else is a GPU (GPU resource ids are model/uuid, not 'gpu')
           else if (r.id) gpuVal = (gpuVal || 0) + val;
         }
       }
 
-      let maxRunStr = null;
-      if (defaultEnv.maxJobDuration != null) {
-        const s = defaultEnv.maxJobDuration;
-        if (s >= 3600) maxRunStr = Math.round(s / 3600) + 'h';
-        else if (s >= 60) maxRunStr = Math.round(s / 60) + 'm';
-        else maxRunStr = s + 's';
-      }
+      const maxRunStr = fmtDuration(defaultEnv.maxJobDuration);
 
       const subLine = [nodeLabel, platformStr].filter(Boolean).join(' · ');
 
@@ -1068,9 +1081,10 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         if (jobSummary?.resources && jobSummary.resources.length > 0) {
           for (const r of jobSummary.resources) {
             if (!r.id) continue;
-            if (r.id.includes('cpu')) cpuVal = r.amount;
-            else if (r.id.includes('ram')) ramVal = r.amount;
-            else if (r.id.includes('disk')) diskVal = r.amount;
+            const kind = resourceKind(r.id);
+            if (kind === 'cpu') cpuVal = r.amount;
+            else if (kind === 'ram') ramVal = r.amount;
+            else if (kind === 'disk') diskVal = r.amount;
             // Anything else is a GPU (GPU resource ids are model/uuid, not 'gpu')
             else {
               gpuVal = (gpuVal || 0) + r.amount;
@@ -1084,18 +1098,13 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         const maxById = {};
         (envInfo.available || []).forEach((r) => {
           if (!r.id) return;
-          if (r.id.includes('cpu')) maxById.cpu = r.max;
-          else if (r.id.includes('ram')) maxById.ram = r.max;
-          else if (r.id.includes('disk')) maxById.disk = r.max;
+          const kind = resourceKind(r.id);
+          if (kind === 'cpu') maxById.cpu = r.max;
+          else if (kind === 'ram') maxById.ram = r.max;
+          else if (kind === 'disk') maxById.disk = r.max;
           else maxById.gpu = (maxById.gpu || 0) + r.max;
         });
-        let maxRunStr = null;
-        if (jobSummary?.duration) {
-          const s = Number(jobSummary.duration);
-          if (s >= 3600) maxRunStr = Math.round(s / 3600) + 'h';
-          else if (s >= 60) maxRunStr = Math.round(s / 60) + 'm';
-          else maxRunStr = s + 's';
-        }
+        const maxRunStr = fmtDuration(jobSummary?.duration);
         // Selected value stays prominent; "/ max" is a small muted suffix.
         const metricCell = (sel, max, unit, label) => {
           const u = unit ? ' ' + unit : '';

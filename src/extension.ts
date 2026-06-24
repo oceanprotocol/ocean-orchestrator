@@ -97,10 +97,6 @@ export function setSelectedProject(p: { algorithmPath: string; resultsFolderPath
   globalContext?.globalState.update('ocean.selectedProject', p)
 }
 
-function persistConfig() {
-  globalContext?.globalState.update('ocean.config', undefined)
-}
-
 async function pushEnvInfo() {
   if (!provider || !config.address || config.isFreeCompute || !config.environmentId || !config.feeToken) {
     provider?.sendMessage({ type: 'envInfo', cost: null, balance: null, symbol: '' })
@@ -114,7 +110,7 @@ async function pushEnvInfo() {
   try {
     const env = (await fetchPaidEnvironments()).find((e) => e.envId === config.environmentId)
     if (env) {
-      available = (env.resources || []).map((r: any) => ({ id: r.id, max: r.max ?? r.maximum }))
+      available = (env.resources || []).map((r: any) => ({ id: r.id, max: r.max ?? r.maximum ?? r.total }))
       const r = await estimateCost({
         env: { ...env, multiaddrs: config.multiaddresses ?? env.multiaddrs },
         resources: config.resources || [],
@@ -123,10 +119,14 @@ async function pushEnvInfo() {
       })
       cost = r.cost
     }
-  } catch {}
+  } catch (e) {
+    console.error('pushEnvInfo: cost estimate failed', e)
+  }
   try {
     balance = await getEscrowBalance(config.feeToken, config.address)
-  } catch {}
+  } catch (e) {
+    console.error('pushEnvInfo: escrow balance failed', e)
+  }
   provider.sendMessage({ type: 'envInfo', cost, balance, symbol, available })
 }
 
@@ -196,7 +196,6 @@ vscode.window.registerUriHandler({
       resources: resourcesParsed,
       chainId: chainIdNumber
     })
-    persistConfig()
     ProviderInstance.setupP2P({ bootstrapPeers: config.multiaddresses }).catch(
       (e) => {
         console.error(e)
@@ -710,7 +709,17 @@ export async function activate(context: vscode.ExtensionContext) {
           const job = completedJobs.get(jobId)
           if (!job) {
             if (outputsURL) {
-              vscode.env.openExternal(vscode.Uri.parse(outputsURL))
+              let parsed: vscode.Uri | undefined
+              try {
+                parsed = vscode.Uri.parse(outputsURL, true)
+              } catch {
+                parsed = undefined
+              }
+              if (parsed && (parsed.scheme === 'http' || parsed.scheme === 'https')) {
+                vscode.env.openExternal(parsed)
+              } else {
+                vscode.window.showErrorMessage('Job results are not available for download.')
+              }
             } else {
               vscode.window.showInformationMessage('Results for this job are available in the dashboard.')
             }
@@ -981,6 +990,23 @@ export async function activate(context: vscode.ExtensionContext) {
       })
     )
 
+    // Apply a paid-job selection from the Configure panel (shared by saveConfig
+    // and runJob): resolve the env's node addr and update the live config.
+    async function applyPaidConfigFromPanel(data: any) {
+      const envs = await fetchPaidEnvironments()
+      const env = envs.find((e) => e.envId === data.envId)
+      config.updateFields({
+        environmentId: data.envId,
+        multiaddresses: env?.multiaddrs ?? config.multiaddresses,
+        feeToken: data.feeToken,
+        chainId: BASE_CHAIN_ID,
+        resources: data.resources,
+        isFreeCompute: false,
+        jobDuration: String(data.durationSeconds || 3600)
+      })
+      provider?.notifyConfigUpdate(config)
+    }
+
     async function handleConfigurePanelMessage(data: any, reply: (msg: any) => void) {
       const requestId = data.requestId
       try {
@@ -1027,37 +1053,13 @@ export async function activate(context: vscode.ExtensionContext) {
             return
           }
           case 'saveConfig': {
-            const envs = await fetchPaidEnvironments()
-            const env = envs.find((e) => e.envId === data.envId)
-            config.updateFields({
-              environmentId: data.envId,
-              multiaddresses: env?.multiaddrs ?? config.multiaddresses,
-              feeToken: data.feeToken,
-              chainId: BASE_CHAIN_ID,
-              resources: data.resources,
-              isFreeCompute: false,
-              jobDuration: String(data.durationSeconds || 3600)
-            })
-            persistConfig()
-            provider?.notifyConfigUpdate(config)
+            await applyPaidConfigFromPanel(data)
             pushEnvInfo()
             reply({ type: 'configSaved', requestId })
             return
           }
           case 'runJob': {
-            const envsForRun = await fetchPaidEnvironments()
-            const envForRun = envsForRun.find((e) => e.envId === data.envId)
-            config.updateFields({
-              environmentId: data.envId,
-              multiaddresses: envForRun?.multiaddrs ?? config.multiaddresses,
-              feeToken: data.feeToken,
-              chainId: BASE_CHAIN_ID,
-              resources: data.resources,
-              isFreeCompute: false,
-              jobDuration: String(data.durationSeconds || 3600)
-            })
-            persistConfig()
-            provider?.notifyConfigUpdate(config)
+            await applyPaidConfigFromPanel(data)
             pendingJobName = data.jobName || generateJobName()
             if (!selectedProject) {
               vscode.window.showErrorMessage('Select a project folder first before running a paid job.')
@@ -1257,7 +1259,6 @@ export async function activate(context: vscode.ExtensionContext) {
               resources: getDefaultResourcesFromFreeEnv(env),
               jobDuration: String(env?.free?.maxJobDuration ?? 7200)
             })
-            persistConfig()
           }
         }
         if (!config.environmentId) {

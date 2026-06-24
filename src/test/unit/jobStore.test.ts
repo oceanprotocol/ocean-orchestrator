@@ -78,6 +78,19 @@ suite('jobStore — mergeJobs (pure)', () => {
     assert.strictEqual(result[0].status, 'Completed')
   })
 
+  test('matched job: incentive Failed beats local Completed on terminal tie (backend authoritative)', () => {
+    const sharedId = 'rank-test-3'
+    const local: LocalJobRecord[] = [makeLocal({ jobId: sharedId, status: 'Completed' })]
+    const incentive: IncentiveJob[] = [
+      makeIncentive({ jobId: sharedId, statusText: 'failed', isRunning: false })
+    ]
+
+    const result = mergeJobs(local, incentive)
+
+    assert.strictEqual(result.length, 1)
+    assert.strictEqual(result[0].status, 'Failed')
+  })
+
   // -----------------------------------------------------------------------
   // (b) id in both → incentive status wins + local name preserved
   // -----------------------------------------------------------------------

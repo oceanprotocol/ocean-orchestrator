@@ -117,7 +117,7 @@ export async function fetchComputeJobs(address: string): Promise<IncentiveJob[]>
     isFree: job.isFree,
     environment: job.environment,
     cost: job.payment?.cost,
-    dateCreated: Number(job.dateCreated),
+    dateCreated: Number(job.dateCreated) || 0,
     dateFinished: Number(job.dateFinished) || undefined,
     outputsURL: job.outputsURL
   }))

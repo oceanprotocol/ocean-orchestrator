@@ -6,6 +6,24 @@ export function formatUnitsToNumber(raw: bigint | string, decimals: number): num
   return parseFloat(ethers.formatUnits(raw, decimals))
 }
 
+const decimalsCache = new Map<string, number>()
+
+export async function getTokenDecimals(feeToken: string): Promise<number> {
+  const lower = (feeToken || '').toLowerCase()
+  const known = SUPPORTED_TOKENS_BASE.find((t) => t.address.toLowerCase() === lower)
+  if (known) {
+    return known.decimals
+  }
+  if (decimalsCache.has(lower)) {
+    return decimalsCache.get(lower)!
+  }
+  const provider = new ethers.JsonRpcProvider(getBaseRpcUrl())
+  const erc20 = new ethers.Contract(feeToken, ['function decimals() view returns (uint8)'], provider)
+  const decimals = Number(await erc20.decimals())
+  decimalsCache.set(lower, decimals)
+  return decimals
+}
+
 export async function getEscrowBalance(feeToken: string, payerAddress: string): Promise<number> {
   const provider = new ethers.JsonRpcProvider(getBaseRpcUrl())
 
@@ -14,21 +32,7 @@ export async function getEscrowBalance(feeToken: string, payerAddress: string): 
   const funds = await escrow.getUserFunds(payerAddress, feeToken)
   const available: bigint = (funds?.available ?? funds?.[0] ?? BigInt(0)) as bigint
 
-  const knownToken = SUPPORTED_TOKENS_BASE.find(
-    (t) => t.address.toLowerCase() === feeToken.toLowerCase()
-  )
-
-  let decimals: number
-  if (knownToken) {
-    decimals = knownToken.decimals
-  } else {
-    const erc20 = new ethers.Contract(
-      feeToken,
-      ['function decimals() view returns (uint8)'],
-      provider
-    )
-    decimals = Number(await erc20.decimals())
-  }
+  const decimals = await getTokenDecimals(feeToken)
 
   return formatUnitsToNumber(available, decimals)
 }

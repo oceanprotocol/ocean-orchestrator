@@ -540,6 +540,10 @@ function resourceBounds(env, id, defaults) {
 
 // "NVIDIA GeForce RTX 3090 | 15 CPU | 49 GB RAM | 125 GB disk" — the env's max
 // resources, GPUs shown by their actual name (description), not id ("gpu0").
+function isGpuResource(r) {
+  return (r.type || '').toLowerCase() === 'gpu' || (r.id || '').toLowerCase().includes('gpu');
+}
+
 function envResourceSummary(env) {
   const res = (env && env.resources) || [];
   const maxOf = (r) => (r.max != null ? r.max : (r.maximum != null ? r.maximum : r.total));
@@ -548,8 +552,7 @@ function envResourceSummary(env) {
   // repeated list. Distinct models stay separate ("4× H200 | 2× A100").
   const gpuByName = {};
   for (const r of res) {
-    const isGpu = (r.type || '').toLowerCase() === 'gpu' || (r.id || '').toLowerCase().includes('gpu');
-    if (!isGpu) { continue; }
+    if (!isGpuResource(r)) { continue; }
     const m = maxOf(r);
     if (m == null || m <= 0) { continue; }
     const name = r.description || r.id;
@@ -598,9 +601,7 @@ function applyEnvToSliders(env) {
   updateReadouts();
 
   // GPU: look for resources with type 'gpu' or id containing 'gpu'
-  const gpuResources = (env.resources || []).filter(
-    (r) => (r.type || '').toLowerCase() === 'gpu' || r.id.toLowerCase().includes('gpu')
-  );
+  const gpuResources = (env.resources || []).filter(isGpuResource);
   const gpuSection = document.getElementById('gpuSection');
   const gpuChecks = document.getElementById('gpuChecks');
   if (gpuResources.length > 0) {

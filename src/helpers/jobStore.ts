@@ -95,7 +95,7 @@ export function mergeJobs(
     if (inc) {
       const localStatus = mapStatus(rec.status ?? 'queued', false)
       const incStatus = mapStatus(inc.statusText, inc.isRunning)
-      const status = statusRank(localStatus) >= statusRank(incStatus) ? localStatus : incStatus
+      const status = statusRank(incStatus) >= statusRank(localStatus) ? incStatus : localStatus
       byId.set(key, {
         // Surface the incentive id: it is the canonical on-node form that
         // View logs / Download / status reads must use.
