@@ -278,8 +278,9 @@ export async function activate(context: vscode.ExtensionContext) {
   console.log('Ocean Orchestrator is now active!')
 
   try {
-    provider = new OceanProtocolViewProvider((event, props) =>
-      trackEvent(anonymousId, event, props)
+    provider = new OceanProtocolViewProvider(
+      (event, props) => trackEvent(anonymousId, event, props),
+      () => selectedProject
     )
     console.log('Created OceanProtocolViewProvider')
 
@@ -373,16 +374,17 @@ export async function activate(context: vscode.ExtensionContext) {
             })
             vscode.window.showInformationMessage('Job stopped successfully')
           } catch (error) {
+            // Stop failed: leave the job intact so status sync keeps tracking it.
             vscode.window.showErrorMessage('Failed to stop job')
-          } finally {
-            const stoppedId = savedJobId
-            savedJobId = null
-            if (stoppedId) {
-              await updateLocalJobStatus(context, stoppedId, 'Stopped')
-            }
-            provider.sendMessage({ type: 'jobStopped' })
-            onJobLifecycleEvent?.().catch(() => {})
+            return
           }
+          const stoppedId = savedJobId
+          savedJobId = null
+          if (stoppedId) {
+            await updateLocalJobStatus(context, stoppedId, 'Stopped')
+          }
+          provider.sendMessage({ type: 'jobStopped' })
+          onJobLifecycleEvent?.().catch(() => {})
         }
       )
     )
@@ -527,7 +529,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             if (pendingJobName) {
               const envLabel = config.environmentId ?? 'unknown'
-              addLocalJob(context, {
+              await addLocalJob(context, {
                 jobId,
                 name: pendingJobName,
                 envLabel,
@@ -538,7 +540,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 authToken: config.authToken,
                 address: config.address
               })
-              requestJobRefresh(config.address ?? '', jobId).catch(() => { /* best-effort */ })
+              if (config.address) {
+                requestJobRefresh(config.address, jobId).catch(() => { /* best-effort */ })
+              }
               pendingJobName = undefined
             }
 
@@ -997,14 +1001,18 @@ export async function activate(context: vscode.ExtensionContext) {
     async function applyPaidConfigFromPanel(data: any) {
       const envs = await fetchPaidEnvironments()
       const env = envs.find((e) => e.envId === data.envId)
+      if (!env) {
+        throw new Error('Selected environment is no longer available')
+      }
       config.updateFields({
         environmentId: data.envId,
-        multiaddresses: env?.multiaddrs ?? config.multiaddresses,
+        multiaddresses: env.multiaddrs,
         feeToken: data.feeToken,
         chainId: BASE_CHAIN_ID,
         resources: data.resources,
         isFreeCompute: false,
-        jobDuration: String(data.durationSeconds || 3600)
+        jobDuration: String(data.durationSeconds || 3600),
+        dataset: data.dataset || undefined
       })
       provider?.notifyConfigUpdate(config)
     }
@@ -1058,27 +1066,6 @@ export async function activate(context: vscode.ExtensionContext) {
             await applyPaidConfigFromPanel(data)
             pushEnvInfo()
             reply({ type: 'configSaved', requestId })
-            return
-          }
-          case 'runJob': {
-            await applyPaidConfigFromPanel(data)
-            pendingJobName = data.jobName || generateJobName()
-            if (!selectedProject) {
-              vscode.window.showErrorMessage('Select a project folder first before running a paid job.')
-              reply({ type: 'configureJobError', requestId, message: 'No project selected' })
-              return
-            }
-            reply({ type: 'runJobAck', requestId })
-            vscode.commands.executeCommand(
-              'ocean-protocol.startComputeJob',
-              selectedProject.algorithmPath,
-              selectedProject.resultsFolderPath,
-              config.authToken,
-              data.dataset,
-              data.dockerImage,
-              data.dockerTag,
-              data.envId
-            )
             return
           }
           case 'openFunding': {
@@ -1161,7 +1148,9 @@ export async function activate(context: vscode.ExtensionContext) {
       }
       syncingStatuses = true
       try {
-        const cutoff = Date.now() - 60 * 60 * 1000
+        // Free jobs can run up to 2h and paid jobs longer; keep polling
+        // non-terminal jobs well past that so they don't get stuck after reload.
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000
         const pollable = localJobsForAddress().filter(
           (j) => j.createdAt > cutoff && !TERMINAL_STATUSES.includes(j.status ?? '')
         )
@@ -1247,6 +1236,12 @@ export async function activate(context: vscode.ExtensionContext) {
           vscode.window.showErrorMessage('Select a project folder first')
           return
         }
+        // Coming from a paid config: drop the paid env/resources/dataset so we
+        // don't submit them to the free default node. (A previously loaded free
+        // env is kept, so a re-run survives a transient env-fetch failure.)
+        if (config.isFreeCompute !== true) {
+          config.updateFields({ environmentId: undefined, resources: undefined, jobDuration: undefined, dataset: undefined })
+        }
         config.updateFields({ isFreeCompute: true, multiaddresses: [DEFAULT_MULTIADDR], feeToken: undefined, chainId: undefined })
         if (!config.environmentId || !config.resources) {
           let envs
@@ -1300,7 +1295,7 @@ export async function activate(context: vscode.ExtensionContext) {
           selectedProject.algorithmPath,
           selectedProject.resultsFolderPath,
           config.authToken,
-          undefined,
+          config.dataset,
           opts?.dockerImage,
           opts?.dockerTag,
           config.environmentId

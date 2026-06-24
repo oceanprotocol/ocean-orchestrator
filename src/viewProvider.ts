@@ -22,7 +22,10 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView
 
   constructor(
-    private readonly trackFn?: (event: string, props?: Record<string, unknown>) => void
+    private readonly trackFn?: (event: string, props?: Record<string, unknown>) => void,
+    private readonly getSelectedProject?: () =>
+      | { algorithmPath: string; resultsFolderPath: string }
+      | undefined
   ) {}
 
   public notifyConfigUpdate(config: SelectedConfig) {
@@ -39,8 +42,11 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _buildStateUpdate(config: SelectedConfig) {
-    const connected = !!config.authToken
-    const mode: 'default-free' | 'connected-paid' = connected ? 'connected-paid' : 'default-free'
+    // A free run also generates/stores an auth token, so an auth token alone
+    // does not mean "paid" — only treat it as paid when not free compute.
+    const hasAuth = !!config.authToken
+    const paidConnected = hasAuth && config.isFreeCompute !== true
+    const mode: 'default-free' | 'connected-paid' = paidConnected ? 'connected-paid' : 'default-free'
 
     let nodeId: string | undefined
     if (config.environmentId) {
@@ -61,7 +67,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     return {
       type: 'stateUpdate',
       mode,
-      status: { connected, nodeId, address: config.address, isFree: config.isFreeCompute },
+      status: { connected: hasAuth, nodeId, address: config.address, isFree: config.isFreeCompute },
       jobSummary: {
         envId,
         envShort,
@@ -317,20 +323,45 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
             case 'viewJobLogs':
               await vscode.commands.executeCommand('ocean-protocol.viewJobLogs', data.jobId)
               break
-            case 'openExternalUrl':
-              vscode.env.openExternal(vscode.Uri.parse(data.url))
+            case 'openExternalUrl': {
+              let parsed: vscode.Uri | undefined
+              try {
+                parsed = vscode.Uri.parse(String(data.url), true)
+              } catch {
+                parsed = undefined
+              }
+              if (!parsed || (parsed.scheme !== 'http' && parsed.scheme !== 'https')) {
+                vscode.window.showErrorMessage('Unsupported external URL.')
+                break
+              }
+              await vscode.env.openExternal(parsed)
               break
+            }
             case 'copyToClipboard':
               vscode.env.clipboard.writeText(data.text)
               break
             case 'getDefaultEnv':
               await vscode.commands.executeCommand('ocean-protocol.loadDefaultEnv')
               break
-            case 'getState':
+            case 'getState': {
               if (this.config) {
                 webviewView.webview.postMessage(this._buildStateUpdate(this.config))
               }
+              // Re-send the restored project so the sidebar re-enables Run after
+              // a reload (project lives in extension memory, not in stateUpdate).
+              const proj = this.getSelectedProject?.()
+              if (proj) {
+                const projectPath = path.dirname(proj.algorithmPath)
+                webviewView.webview.postMessage({
+                  type: 'projectFolder',
+                  path: projectPath,
+                  projectType: await detectProjectType(projectPath),
+                  algorithmPath: proj.algorithmPath,
+                  algorithmFileName: path.basename(proj.algorithmPath)
+                })
+              }
               break
+            }
           }
         } catch (error) {
           console.error('Error handling message:', error)
@@ -874,6 +905,20 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       return s + 's';
     }
 
+    // Escape values that originate from job metadata or the node/incentive API
+    // before they are concatenated into innerHTML (CSP allows inline script).
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+        switch (ch) {
+          case '&': return '&amp;';
+          case '<': return '&lt;';
+          case '>': return '&gt;';
+          case '"': return '&quot;';
+          default: return '&#39;';
+        }
+      });
+    }
+
     function statusClass(s) {
       if (!s) return 'stopped';
       switch (s.toLowerCase()) {
@@ -1046,7 +1091,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       if (maxRunStr != null) cells += '<div class="env-metric-cell"><div class="env-metric-val">' + maxRunStr + '</div><div class="env-metric-lbl">MAX RUN</div></div>';
 
       let html = '<span class="label-section">SELECTED ENVIRONMENT</span>';
-      if (subLine) html += '<div class="env-node-sub">' + subLine + '</div>';
+      if (subLine) html += '<div class="env-node-sub">' + escapeHtml(subLine) + '</div>';
       if (cells) html += '<div class="env-metric-grid">' + cells + '</div>';
       defaultEnvBody.innerHTML = html;
     }
@@ -1111,7 +1156,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           const val = max != null
             ? sel + '<span class="mv-max">/ ' + max + u + '</span>'
             : sel + u;
-          return '<div class="env-metric-cell"><div class="env-metric-val">' + val + '</div><div class="env-metric-lbl">' + label + '</div></div>';
+          return '<div class="env-metric-cell"><div class="env-metric-val">' + val + '</div><div class="env-metric-lbl">' + escapeHtml(label) + '</div></div>';
         };
         // Label the GPU cell with the actual model ("NVIDIA H200") instead of a
         // generic "GPU" when a single model is selected; fall back to "GPU" for
@@ -1209,10 +1254,10 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           : j.jobId.slice(0, 8) + '…';
         const timeStr = fmtTime(j.finishedAt || j.createdAt);
         return (
-          '<div class="job-row' + sel + '" data-id="' + j.jobId + '">' +
+          '<div class="job-row' + sel + '" data-id="' + escapeHtml(j.jobId) + '">' +
           '<span class="status-dot ' + sc + '"></span>' +
-          '<span class="job-name" title="' + (j.name || j.jobId) + '">' + shortName + '</span>' +
-          '<span class="status-badge ' + sc + '">' + status + '</span>' +
+          '<span class="job-name" title="' + escapeHtml(j.name || j.jobId) + '">' + escapeHtml(shortName) + '</span>' +
+          '<span class="status-badge ' + sc + '">' + escapeHtml(status) + '</span>' +
           '<span class="job-time">' + timeStr + '</span>' +
           '</div>'
         );

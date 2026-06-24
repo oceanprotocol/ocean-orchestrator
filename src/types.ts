@@ -20,6 +20,7 @@ export class SelectedConfig {
   jobDuration?: string
   resources?: IdeResource[]
   chainId?: number
+  dataset?: string
 
   constructor(params: Partial<SelectedConfig>) {
     Object.assign(this, params)

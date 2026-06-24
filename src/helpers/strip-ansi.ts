@@ -19,7 +19,7 @@ export function stripAnsi(string: string): string {
     throw new TypeError(`Expected a \`string\`, got \`${typeof string}\``)
   }
 
-  if (!string.includes('') && !string.includes('')) {
+  if (!string.includes('\u001b') && !string.includes('\u009b')) {
     return string
   }
 

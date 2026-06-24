@@ -602,6 +602,12 @@ function applyEnvToSliders(env) {
 
   // GPU: look for resources with type 'gpu' or id containing 'gpu'
   const gpuResources = (env.resources || []).filter(isGpuResource);
+  // Drop selections from a previously-selected env so stale GPU ids don't leak
+  // into estimateCost/saveConfig payloads for this env.
+  const validGpuIds = new Set(gpuResources.map((r) => r.id));
+  for (const id of Object.keys(state.gpuSelections)) {
+    if (!validGpuIds.has(id)) delete state.gpuSelections[id];
+  }
   const gpuSection = document.getElementById('gpuSection');
   const gpuChecks = document.getElementById('gpuChecks');
   if (gpuResources.length > 0) {
