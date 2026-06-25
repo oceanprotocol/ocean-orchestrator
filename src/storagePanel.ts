@@ -135,8 +135,9 @@ ${webviewCss()}
   </div>
 
   <div id="lockedState" class="locked-state" style="display:none">
-    <strong>Persistent storage unavailable</strong>
-    Configure node via dashboard to enable persistent storage.
+    <strong>Connect through the dashboard to use storage</strong>
+    <div>Persistent storage needs a wallet, network, and a signed session. These are set up when you open this extension from the Ocean dashboard. Free compute jobs run without storage.</div>
+    <button id="connectDashboardBtn" class="btn btn-pri" style="margin-top:var(--sp-4)">Open dashboard</button>
   </div>
 
   <div id="bucketListView" class="content" style="display:none">
@@ -659,6 +660,9 @@ ${webviewCss()}
 
   document.getElementById('backBtn').addEventListener('click', renderList);
   document.getElementById('uploadBtn').addEventListener('click', uploadFile);
+  document.getElementById('connectDashboardBtn').addEventListener('click', () => {
+    vscode.postMessage({ type: 'openDashboard' });
+  });
   document.getElementById('cancelCreateBtn').addEventListener('click', closeCreateModal);
   document.getElementById('confirmCreateBtn').addEventListener('click', confirmCreate);
   document.getElementById('cancelRenameBtn').addEventListener('click', closeRenameModal);

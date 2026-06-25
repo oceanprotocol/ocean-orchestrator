@@ -459,10 +459,11 @@ export async function saveOutput(
   prefix: string = 'output',
   onProgress?: (bytesWritten: number, totalBytes: number) => void,
   totalSize?: number,
-  cancelSignal?: AbortSignal
+  cancelSignal?: AbortSignal,
+  folderName?: string
 ): Promise<string> {
   const baseDir = destinationFolder || path.join(process.cwd(), 'results')
-  const resultsDir = path.join(baseDir, jobId)
+  const resultsDir = path.join(baseDir, folderName || jobId)
   const filePath = path.join(resultsDir, `${prefix}.tar`)
   await fs.promises.mkdir(resultsDir, { recursive: true })
 

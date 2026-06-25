@@ -50,7 +50,7 @@ import {
 } from './helpers/incentive'
 import { estimateCost } from './helpers/cost'
 import { getEscrowBalance, getTokenSymbol, invalidateEscrowBalance } from './helpers/escrow'
-import { generateJobName } from './helpers/jobNames'
+import { generateJobName, jobResultsFolderName } from './helpers/jobNames'
 import {
   addLocalJob,
   updateLocalJobStatus,
@@ -691,6 +691,14 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             return
           }
+          // Save under a "<job name>_<date>_<time>" folder instead of the raw
+          // jobId. Date comes from the job record so re-downloads reuse it.
+          const jobRecord = getLocalJobs(context).find((j) => j.jobId === jobId)
+          const folderName = jobResultsFolderName(
+            jobRecord?.name,
+            jobRecord?.createdAt,
+            jobId
+          )
           await vscode.window.withProgress(
             {
               location: vscode.ProgressLocation.Notification,
@@ -730,7 +738,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     jobId,
                     log.index,
                     log.filename,
-                    job.resultsFolderPath
+                    job.resultsFolderPath,
+                    undefined,
+                    folderName
                   )
                 }
 
@@ -749,7 +759,8 @@ export async function activate(context: vscode.ExtensionContext) {
                       prefix,
                       onDownloadProgress,
                       job.archiveSize > 0 ? job.archiveSize : undefined,
-                      abortController.signal
+                      abortController.signal,
+                      folderName
                     )
                     outputChannel.appendLine(`Results saved to: ${filePath}`)
                     vscode.window.showInformationMessage(
@@ -783,6 +794,10 @@ export async function activate(context: vscode.ExtensionContext) {
       const requestId = data.requestId
       try {
         switch (data.type) {
+          case 'openDashboard': {
+            await vscode.env.openExternal(vscode.Uri.parse(dashboardConnectUrl()))
+            return
+          }
           case 'listBuckets': {
             const buckets = await persistentStorage.listBuckets(config)
             reply({ type: 'bucketsLoaded', requestId, buckets })
@@ -1507,7 +1522,8 @@ async function getAndSaveLogs(
   index: number,
   fileName: string,
   resultsFolderPath: string,
-  progress?: vscode.Progress<{ message?: string }>
+  progress?: vscode.Progress<{ message?: string }>,
+  folderName?: string
 ) {
   const result = await withRetrial(() => getComputeResult(config, jobId, index), progress)
 
@@ -1515,7 +1531,7 @@ async function getAndSaveLogs(
   const content = await streamToString(result)
   const filePathLogs = await saveResults(
     content,
-    path.join(resultsFolderPath, jobId),
+    path.join(resultsFolderPath, folderName || jobId),
     fileName
   )
   outputChannel.appendLine(`${fileName} saved to: ${filePathLogs}`)
