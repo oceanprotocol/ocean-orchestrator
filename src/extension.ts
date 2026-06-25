@@ -18,10 +18,8 @@ import {
   saveResults,
   streamToString,
   stopComputeJob,
-  withRetrial,
-  getStatus
+  withRetrial
 } from './helpers/compute'
-import { validateDatasetFromInput } from './helpers/validation'
 import { stripAnsi, stripControlChars } from './helpers/strip-ansi'
 import { SelectedConfig } from './types'
 import { ethers, Signer } from 'ethers'
@@ -36,7 +34,7 @@ import * as mountRegistry from './helpers/persistentMountRegistry'
 import * as outputBucketRegistry from './helpers/outputBucketRegistry'
 import { StorageErrorCode } from './types'
 import { DEFAULT_MULTIADDR } from './helpers/p2p'
-import { ComputeAsset, NodeStatus, ProviderInstance } from '@oceanprotocol/lib'
+import { ComputeAsset, ProviderInstance } from '@oceanprotocol/lib'
 import {
   initAnalytics,
   identifyUser,
@@ -84,7 +82,6 @@ let config: SelectedConfig = new SelectedConfig({
   multiaddresses: [DEFAULT_MULTIADDR]
 })
 let provider: OceanProtocolViewProvider
-let firstStartup = true
 let anonymousId: string
 let globalContext: vscode.ExtensionContext | undefined
 
@@ -305,55 +302,6 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     })
     context.subscriptions.push(testCommand)
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ocean-protocol.getStatus', async () => {
-            let status: NodeStatus
-            try {
-                status = await getStatus(config.multiaddresses)
-            } catch (e) {
-                trackP2PError(config.address || anonymousId, e, 'getStatus')
-                throw e
-            }
-
-            return status
-        })
-    )
-
-    context.subscriptions.push(
-      vscode.commands.registerCommand('ocean-protocol.getEnvironments', async () => {
-        let environments
-        try {
-          environments = await getComputeEnvironments(config.multiaddresses)
-        } catch (e) {
-          trackP2PError(config.address || anonymousId, e, 'getComputeEnvironments')
-          throw e
-        }
-        if (firstStartup && Array.isArray(environments) && environments.length > 0) {
-          const env =
-            environments.find((e: { id?: string }) => e.id === config.environmentId) ??
-            environments[0]
-          config.updateFields({
-            environmentId: env.id,
-            resources: getDefaultResourcesFromFreeEnv(env),
-            jobDuration: String(env?.free?.maxJobDuration ?? 7200)
-          })
-          provider?.notifyConfigUpdate(config)
-          firstStartup = false
-        }
-
-        return environments
-      })
-    )
-
-    context.subscriptions.push(
-      vscode.commands.registerCommand(
-        'ocean-protocol.validateDataset',
-        async (input: string) => {
-          return await validateDatasetFromInput(config.multiaddresses, input)
-        }
-      )
-    )
 
     context.subscriptions.push(
       vscode.commands.registerCommand(

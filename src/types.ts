@@ -1,5 +1,7 @@
 import {
   ComputeResourceRequest,
+  ComputeResource,
+  ComputeEnvFeesStructure,
   PersistentStorageAccessList,
   PersistentStorageBucket,
   PersistentStorageFileEntry
@@ -48,8 +50,8 @@ export type EnvSummary = {
   multiaddrs?: string[]
   consumerAddress: string
   label: string
-  resources?: any[]
-  fees?: any
+  resources?: ComputeResource[]
+  fees?: ComputeEnvFeesStructure
   feeTokens: string[]
 }
 
