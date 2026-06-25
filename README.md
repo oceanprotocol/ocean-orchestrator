@@ -78,6 +78,7 @@ Ocean Orchestrator adds a dedicated Ocean section to the activity bar. From ther
 **Important:** Your algorithm must write all outputs to `./data/outputs/` inside the container. The runtime mounts this path and returns only what is written there.
 
 Python example:
+
 ```python
 import os, json
 os.makedirs("./data/outputs", exist_ok=True)
@@ -86,21 +87,22 @@ with open("./data/outputs/result.json", "w") as f:
 ```
 
 JavaScript example:
+
 ```js
-const fs = require("fs");
-fs.mkdirSync("./data/outputs", { recursive: true });
-fs.writeFileSync("./data/outputs/result.json", JSON.stringify({ result: "..." }));
+const fs = require('fs')
+fs.mkdirSync('./data/outputs', { recursive: true })
+fs.writeFileSync('./data/outputs/result.json', JSON.stringify({ result: '...' }))
 ```
 
 ## Project Templates
 
 When you create a new project, Ocean Orchestrator generates a template based on your selected language:
 
-| Template | Algorithm file | Dependencies | Dockerfile |
-|---|---|---|---|
-| Python | `algo.py` | `requirements.txt` (numpy, pandas, requests) | Ubuntu 24.04, Python 3 venv |
-| JavaScript | `algo.js` | `package.json` (axios, bignumber.js, ethers) | Node 22 multi-stage |
-| Docker Image | `algo.placeholder` (docs only) | none | none — provide image and tag in Setup |
+| Template     | Algorithm file                 | Dependencies                                 | Dockerfile                            |
+| ------------ | ------------------------------ | -------------------------------------------- | ------------------------------------- |
+| Python       | `algo.py`                      | `requirements.txt` (numpy, pandas, requests) | Ubuntu 24.04, Python 3 venv           |
+| JavaScript   | `algo.js`                      | `package.json` (axios, bignumber.js, ethers) | Node 22 multi-stage                   |
+| Docker Image | `algo.placeholder` (docs only) | none                                         | none — provide image and tag in Setup |
 
 A `.env` file is generated for all templates. Any variables you add there are passed as environment variables into the container at runtime.
 
@@ -127,10 +129,12 @@ The timestamp uses ISO format truncated to minutes with colons replaced by dashe
 Ocean Orchestrator exposes logs in two places:
 
 **Output channels** (View > Output in your editor):
+
 - **Ocean Orchestrator** — general status and progress messages for the job lifecycle
 - **Algorithm Logs - {jobId}** — live stdout/stderr streamed from your algorithm while the job is running
 
 **Filesystem logs** — after job completion, log files are saved to:
+
 ```
 results/results-{timestamp}/logs/
 ```
@@ -212,3 +216,15 @@ Contributions are welcome. Please check the repository guidelines for local deve
 ### Publishing the Extension
 
 For the CI to publish the extension, you just need to ensure that the version number is bumped in `package.json` on main, and then the rest is automatic via the GitHub CI.
+
+## Prefer to drive it from your AI assistant?
+
+If you're learning about AI, machine learning, and algorithms, try the **[ON MCP](https://docs.oncompute.ai/on-mcp/quickstart)** the compute distrivuted network, driven straight from **Claude**, **Gemini**, **ChatGPT**, **Cursor** or **Github Copilot**. Instead of clicking through panels, you just describe what you want: The Ai agent writes and validates your algorithm, finds the right compute environment, and runs free or paid jobs for you. It's the fastest way to go from a question to a real result, and to become hands-on with ML training without leaving your chat.
+
+Add it to any MCP-compatible AI platform (Claude, Gemini, ChatGPT, Cursor, GitHub Copilot, and more) using the connector URL:
+
+```
+https://mcp.oncompute.ai/mcp
+```
+
+> Get started with the [ON Compute MCP quickstart](https://docs.oncompute.ai/on-mcp/quickstart).
