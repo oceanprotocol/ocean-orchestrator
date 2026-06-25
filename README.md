@@ -219,7 +219,7 @@ For the CI to publish the extension, you just need to ensure that the version nu
 
 ## Prefer to drive it from your AI assistant?
 
-If you're learning about AI, machine learning, and algorithms, try the **[ON MCP](https://docs.oncompute.ai/on-mcp/quickstart)** the compute distrivuted network, driven straight from **Claude**, **Gemini**, **ChatGPT**, **Cursor** or **Github Copilot**. Instead of clicking through panels, you just describe what you want: The Ai agent writes and validates your algorithm, finds the right compute environment, and runs free or paid jobs for you. It's the fastest way to go from a question to a real result, and to become hands-on with ML training without leaving your chat.
+If you're learning about AI, machine learning, and algorithms, try the **[ON MCP](https://docs.oncompute.ai/on-mcp/quickstart)** the compute distributed network, driven straight from **Claude**, **Gemini**, **ChatGPT**, **Cursor** or **Github Copilot**. Instead of clicking through panels, you just describe what you want: The AI agent writes and validates your algorithm, finds the right compute environment, and runs free or paid jobs for you. It's the fastest way to go from a question to a real result, and to become hands-on with ML training without leaving your chat.
 
 Add it to any MCP-compatible AI platform (Claude, Gemini, ChatGPT, Cursor, GitHub Copilot, and more) using the connector URL:
 
