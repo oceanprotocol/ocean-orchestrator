@@ -91,6 +91,11 @@ ${webviewCss()}
 /* ============================================================
    Panel-specific overrides
    ============================================================ */
+/* Editor-tab surface: the shared base no longer forces a background. */
+body {
+  background: var(--vscode-editor-background);
+}
+
 .panel-layout {
   display: grid;
   grid-template-columns: 1fr 320px;
@@ -679,7 +684,7 @@ async function runCostEstimate() {
     const costEl = document.getElementById('costValue');
     costEl.textContent = state.cost != null ? state.cost.toFixed(4) + ' ' + tokenSymbol(state.selectedFeeToken) : '—';
     costEl.classList.remove('computing');
-    updateRunButton();
+    updateBalanceWarning();
   } catch (e) {
     document.getElementById('costValue').textContent = 'estimate unavailable';
     state.cost = null;
@@ -731,7 +736,7 @@ async function fetchBalance(feeToken) {
         state.balance.toFixed(4) + ' ' + tokenSymbol(feeToken);
       startBalanceAgeTicker();
     }
-    updateRunButton();
+    updateBalanceWarning();
   } catch (e) {
     document.getElementById('balanceValue').textContent = 'unavailable';
     state.balance = null;
@@ -751,9 +756,9 @@ function startBalanceAgeTicker() {
 }
 
 // ============================================================
-// Run button gating
+// Insufficient-balance warning
 // ============================================================
-function updateRunButton() {
+function updateBalanceWarning() {
   const warn = document.getElementById('balanceWarn');
   const insufficient =
     state.balance !== null && state.cost !== null && state.balance < state.cost;
@@ -883,7 +888,7 @@ window.addEventListener('message', (event) => {
         document.getElementById('balanceValue').textContent =
           bal.toFixed(4) + ' ' + tokenSymbol(tok);
         document.getElementById('balanceAge').textContent = 'just now';
-        updateRunButton();
+        updateBalanceWarning();
       }
       return;
     }

@@ -41,7 +41,8 @@ body {
   font-size: var(--vscode-font-size);
   line-height: 1.5;
   color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
+  /* No background here: this base is shared by editor-tab panels and the
+     sidebar, which have different palettes. Each surface sets its own. */
 }
 
 a {

@@ -56,6 +56,11 @@ ${webviewCss()}
    Storage-panel–specific overrides (classes not in the shared system)
    ========================================================================= */
 
+/* Editor-tab surface: the shared base no longer forces a background. */
+body {
+  background: var(--vscode-editor-background);
+}
+
 /* Toolbar title uses h2 here (shared uses .toolbar-title) */
 .toolbar h2 {
   margin: 0;
