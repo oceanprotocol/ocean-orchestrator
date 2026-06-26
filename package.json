@@ -131,7 +131,7 @@
     "@libp2p/websockets": "^10.1.2",
     "@multiformats/multiaddr": "^13.0.1",
     "@oceanprotocol/contracts": "^2.8.0",
-    "@oceanprotocol/lib": "8.6.0",
+    "@oceanprotocol/lib": "8.6.1",
     "chai": "^4.3.10",
     "cross-fetch": "^4.0.0",
     "crypto": "^1.0.1",
