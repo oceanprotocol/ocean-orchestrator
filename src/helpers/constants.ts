@@ -16,7 +16,7 @@ export function getBaseRpcUrl(): string {
 }
 
 export const DASHBOARD_URL = 'https://dashboard.oncompute.ai'
-export const INCENTIVE_API_ROOT = 'https://api.oncompute.ai'
+export const INCENTIVE_API_ROOT = process.env.INCENTIVE_BACKEND_URL as string
 
 export const SUPPORTED_TOKENS_BASE: { symbol: string; address: string; decimals: number }[] = [
   { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },

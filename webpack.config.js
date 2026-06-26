@@ -1,6 +1,9 @@
 // webpack.config.js
 const path = require('path')
+const webpack = require('webpack')
 const NodePolyfillPlugin = require('node-polyfill-webpack-plugin')
+
+const INCENTIVE_BACKEND_URL = 'https://api.oncompute.ai'
 
 module.exports = {
   target: 'node', // Ensure the code is compiled for Node.js
@@ -30,7 +33,12 @@ module.exports = {
       zlib: require.resolve('browserify-zlib')
     }
   },
-  plugins: [new NodePolyfillPlugin()],
+  plugins: [
+    new NodePolyfillPlugin(),
+    new webpack.DefinePlugin({
+      'process.env.INCENTIVE_BACKEND_URL': JSON.stringify(INCENTIVE_BACKEND_URL)
+    })
+  ],
   module: {
     rules: [
       {
