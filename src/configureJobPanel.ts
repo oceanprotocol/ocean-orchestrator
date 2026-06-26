@@ -695,13 +695,16 @@ async function runCostEstimate() {
 }
 
 function buildResourcePayload() {
+  const env = state.envs.find((e) => e.envId === state.selectedEnvId);
   const base = [
     { id: 'cpu', amount: state.resources.cpu },
     { id: 'ram', amount: state.resources.ram },
     { id: 'disk', amount: state.resources.disk }
   ];
   for (const [id, checked] of Object.entries(state.gpuSelections)) {
-    if (checked) base.push({ id, amount: 1 });
+    if (!checked) continue;
+    const gr = ((env && env.resources) || []).find((r) => r.id === id);
+    base.push({ id, amount: 1, description: gr && (gr.description || gr.label) });
   }
   return base;
 }

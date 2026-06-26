@@ -1084,8 +1084,10 @@ export async function activate(context: vscode.ExtensionContext) {
             ram: resourceAmount('ram'),
             disk: resourceAmount('disk')
           },
+          // Only GPUs the user actually selected (amount > 0) are pre-checked;
+          // the env may expose GPUs at amount 0 (offered but not selected).
           gpuIds: (config.resources || [])
-            .filter((r) => !['cpu', 'ram', 'disk'].includes(r.id))
+            .filter((r) => !['cpu', 'ram', 'disk'].includes(r.id) && (r.amount ?? 0) > 0)
             .map((r) => r.id),
           durationSeconds: config.jobDuration ? Number(config.jobDuration) : undefined,
           dataset: config.dataset
