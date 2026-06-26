@@ -43,37 +43,48 @@ Outputs and logs are saved to your results folder as soon as the job completes.
 ## Getting Started
 
 1. Install Ocean Orchestrator from your favorite extension marketplace in the extensions tab of your IDE. We currently support VS Code, Cursor, Antigravity, and Windsurf.
-2. Open the Ocean Orchestrator panel from the activity bar
+2. Open the Ocean Orchestrator panel from the activity bar.
 3. Create a new project folder:
    - Choose a parent directory for your project
    - Name your project (default: `new-compute-job`)
-   - Select your language: Python, JavaScript, or your custom container
+   - Select your language: Python, JavaScript, or your own container
 4. Explore your project structure:
    - Algorithm file (`.py` or `.js`)
    - Dockerfile with environment setup
    - Dependencies file (`requirements.txt` or `package.json`)
    - `.env` secrets file — contents are passed as environment variables into the container
-5. Click **Start FREE Compute Job**
-6. Monitor job status and logs in the Output console
-7. Check results and logs in your project's `results/results-{timestamp}/` folder
+5. Run the job — see **Running a Job** below for the free and paid paths.
+6. Monitor job status and logs in the Output console.
+7. Check results and logs in your project's `results/<job-name>_<date>_<time>/` folder.
 
 ### Extension Layout
 
-Ocean Orchestrator adds a dedicated Ocean section to the activity bar. From there, you can:
+Ocean Orchestrator adds a dedicated Ocean section to the activity bar. The sidebar shows:
 
-- Optionally select a dataset file
-- Create a new compute project or select an existing one
-- View available compute resources under Setup
-- Configure compute settings under Configure Compute
-- Start free or paid compute jobs
+- A **status line** with the node connection state (Connecting… / Connected / Failed) and your wallet address when connected.
+- A **project selector** (`Select`) to create or pick a compute project.
+- An **environment card** (paid mode only) with the selected environment's resources, estimated cost, and escrow balance, plus a **Configure ⚙** button.
+- A primary **Run** button (`Run free test job` or `Run job`) that doubles as **Stop job** for a running job.
+- A **Download results** button for the selected job.
+- A **Jobs** list with your current and recent jobs.
+- **Connect for paid environments ↗** and **Manage storage ↗** links.
 
-### Starting a Compute Job
+### Running a Job
 
-1. Create a new project folder or select an existing one
-2. Review your algorithm, Dockerfile, and dependencies
-3. Click **Start Free Compute Job** or switch to paid for more resources
-4. Monitor job status and real-time logs in the Output console
-5. Check outputs in `results/results-{timestamp}/`
+#### Free run
+
+1. Create a new project folder or select an existing one.
+2. Review your algorithm, Dockerfile, and dependencies.
+3. Optionally set a job name (a friendly name is generated automatically).
+4. Click **Run free test job**. The job runs on the default public node with preset resources — no wallet required.
+5. Monitor job status and real-time logs in the Output console.
+
+#### Paid run
+
+1. Click **Connect for paid environments ↗** in the sidebar (or start from the [Ocean dashboard](https://dashboard.oncompute.ai)). The dashboard sends the extension a `vscode://` deep link that configures your wallet, node, environment, fee token, resources, and duration. The sidebar switches to paid mode and persistent storage unlocks.
+2. *Optionally* click **Configure ⚙** to refine the environment, resources, GPUs, dataset, and duration in the Configure Job panel (see below).
+3. If your escrow balance is below the estimated cost, click **Add funds** to top up.
+4. Click **Run job** in the sidebar.
 
 **Important:** Your algorithm must write all outputs to `./data/outputs/` inside the container. The runtime mounts this path and returns only what is written there.
 
@@ -92,6 +103,32 @@ fs.mkdirSync("./data/outputs", { recursive: true });
 fs.writeFileSync("./data/outputs/result.json", JSON.stringify({ result: "..." }));
 ```
 
+## Configure Job & Paid Compute
+
+The Configure Job panel refines the paid setup the dashboard handshake created. Open it with the **Configure ⚙** button in the sidebar's environment card, or run **Ocean: Configure Job** from the Command Palette.
+
+In the panel you can:
+
+- **Environment** — choose a paid compute environment (filtered to the supported network and fee tokens).
+- **Fee token** — pick the ERC-20 token used to pay for the run.
+- **CPU / RAM / Disk / Duration** — adjust with sliders, bounded by the selected environment's limits.
+- **GPUs** — tick the specific GPUs to attach (shown by model, e.g. NVIDIA H200).
+- **Dataset** — optionally provide a dataset URL/DID to mount for the job.
+- **Estimated cost vs escrow balance** — the panel shows a live `Est. cost ≈ … / run` and your current `Escrow …` balance, with a warning when the balance is insufficient.
+- **Add funds ↗** — opens the dashboard escrow page to top up.
+- **Mount from storage ↗** — opens the Persistent Storage panel to attach bucket files as inputs.
+- **Save** — applies the configuration back to the sidebar so you can run from there.
+
+Paid jobs charge per run based on the selected resources, GPUs, duration, and environment. Free jobs use minimal preset resources on the default public node and require no payment.
+
+## Job History & Monitoring
+
+The **Jobs** list in the sidebar merges your local session jobs with your job history from the Ocean incentive backend (when connected). Each row shows the job name and a status badge (Running, Completed, Failed, Stopped, or Queued); a running job is pinned to the top, and a running timer is shown for it. Use **Show N more** to expand the list.
+
+- **Select a job** — click a row to view its logs in the Output console and enable **Download results** / **Stop job** for that job.
+- **Status sync** — non-terminal jobs are periodically refreshed so their status updates without manual action.
+- **Refresh** — use the refresh control in the status line to re-fetch the default environment and job list.
+
 ## Project Templates
 
 When you create a new project, Ocean Orchestrator generates a template based on your selected language:
@@ -100,27 +137,27 @@ When you create a new project, Ocean Orchestrator generates a template based on 
 |---|---|---|---|
 | Python | `algo.py` | `requirements.txt` (numpy, pandas, requests) | Ubuntu 24.04, Python 3 venv |
 | JavaScript | `algo.js` | `package.json` (axios, bignumber.js, ethers) | Node 22 multi-stage |
-| Docker Image | `algo.placeholder` (docs only) | none | none — provide image and tag in Setup |
+| Docker Image | `algo.placeholder` (docs only) | none | none — provide image and tag before running |
 
 A `.env` file is generated for all templates. Any variables you add there are passed as environment variables into the container at runtime.
 
-For the Docker Image template, no Dockerfile is created. Set your image and tag in the Setup section before starting a job.
+For the Docker Image template, no Dockerfile is created. Provide your image and tag before starting a job.
 
 ## Results
 
-After a job completes, outputs are saved to your project folder under:
+After a job completes, outputs are saved to your project folder under a folder named after the job:
 
 ```
 results/
-  results-{timestamp}/
-    output.tar
-    output_extracted/
+  <job-name>_<date>_<time>/
+    result-output.tar
+    result-output_extracted/
       ...your algorithm's ./data/outputs/ contents...
     logs/
-      ...log files as .txt...
+      ...log files...
 ```
 
-The timestamp uses ISO format truncated to minutes with colons replaced by dashes (e.g., `results-2025-03-15T14-30`).
+The folder name combines the job's name with its creation date and time, e.g. `swift-falcon_2025-03-15_1430`. Jobs without a friendly name fall back to a short job id. If results were written to a persistent-storage output bucket (see below), they are kept in that bucket instead of downloaded as an archive.
 
 ## Logs
 
@@ -132,48 +169,39 @@ Ocean Orchestrator exposes logs in two places:
 
 **Filesystem logs** — after job completion, log files are saved to:
 ```
-results/results-{timestamp}/logs/
+results/<job-name>_<date>_<time>/logs/
 ```
 
 ## Persistent Storage
 
 Reuse files across jobs without re-uploading. Files live on the connected node, organized into **buckets** owned by your address.
 
+Persistent storage requires connecting through the Ocean dashboard — it needs a wallet, network, and signed session. Until you connect, the Storage panel is locked and shows an **Open dashboard** button. Free/first-run compute jobs run without storage.
+
 **Workflow:**
 
-1. Open the **Storage** panel in the sidebar.
+1. Open the **Manage storage ↗** link in the sidebar.
 2. **Create bucket** — leave the access list contract blank for owner-only access, or add one to share with addresses on a whitelist contract.
 3. **Upload** files into the bucket.
-4. **Tick** the files you want available to your next compute job.
-5. Run a job as usual — ticked files are bind-mounted into the algorithm container.
+4. **Mount** the files you want available to your next compute job (tick them in the bucket). Mounts are remembered per node and network.
+5. Run a job as usual — mounted files are bind-mounted into the algorithm container.
+
+Optionally set a bucket as the **output bucket** for the current node so a job's results are written directly to it instead of downloaded locally.
 
 **Accessing files in your algorithm**
 
 Mounted files appear at `/data/persistentStorage/<bucketId>/<fileName>` (read-only). They are **not** placed in `/data/inputs/`.
 
-## Advanced Setup
+## Settings
 
-### Custom Docker Image
-
-Use your own docker image if you are not using a Dockerfile in the project folder.
-
-### Compute Resources
-
-Free compute uses minimal resources for testing. See available tiers under Setup.
-
-### Paid Compute
-
-Paid compute jobs run on demand and charge per run based on resources, time, and environment selection.
-
-### Node Status Check
-
-Use **Check** under Setup to verify node availability before running a job.
+- **`ocean.baseRpcUrl`** (default `https://mainnet.base.org`) — the Base RPC endpoint used for escrow balance reads and on-chain queries. Set this to a private RPC provider for better reliability.
 
 ## Troubleshooting
 
-- **Job cannot start** — Check the node status under Setup, then press Check.
-- **Not enough funds** — Switch to free compute or top up your account.
-- **General issues** — Check logs in the Output console. Logs are also saved in your project folder under `results/results-{timestamp}/logs/`.
+- **Job cannot start** — Check the node connection state in the sidebar status line; for paid jobs, confirm an environment is selected in the Configure Job panel.
+- **Not enough funds / insufficient escrow** — Run a free job instead, or use **Add funds** in the Configure Job panel to top up your escrow balance.
+- **Storage is locked** — Persistent storage is only available after you connect through the Ocean dashboard. Use the **Open dashboard** button in the Storage panel.
+- **General issues** — Check logs in the Output console. Logs are also saved in your project folder under `results/<job-name>_<date>_<time>/logs/`.
 
 ## Development and Contributing
 
