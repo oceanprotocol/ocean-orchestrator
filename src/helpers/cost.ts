@@ -5,9 +5,6 @@ import { formatUnitsToNumber as denominateCost, getTokenDecimals } from './escro
 
 export { denominateCost }
 
-// Cost is deterministic for the same env/resources/duration/token, so cache it
-// briefly: the sidebar (pushEnvInfo) and the panel ask for the identical
-// estimate within ~1s of each other, and that would otherwise be two node calls.
 type CostResult = { cost: number; minLockSeconds: number }
 const costCache = new Map<string, { value: CostResult; at: number }>()
 const COST_TTL_MS = 60_000

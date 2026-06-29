@@ -24,10 +24,6 @@ export async function getTokenDecimals(feeToken: string): Promise<number> {
   return decimals
 }
 
-// Escrow balance changes on-chain, so cache it only briefly: this dedups the
-// burst where the panel and the sidebar (pushEnvInfo) read the same balance
-// within ~1s, while staying short enough that the panel's ~10s poll refreshes.
-// Job start/finish call invalidateEscrowBalance() to force a fresh read.
 const balanceCache = new Map<string, { value: number; at: number }>()
 const BALANCE_TTL_MS = 5_000
 

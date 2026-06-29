@@ -46,9 +46,6 @@ function mapStatus(
 ): JobView['status'] {
   if (isRunning) { return 'Running' }
 
-  // The node returns phrases ("Job finished", "Building algorithm image
-  // failed"), not bare status words, so match on substrings. Failure is
-  // checked first so "finished with errors" reads as Failed.
   const s = (statusText ?? '').toLowerCase()
   if (/fail|error|timeout/.test(s)) { return 'Failed' }
   if (/finish|complet/.test(s)) { return 'Completed' }
@@ -71,10 +68,6 @@ export function mergeJobs(
   local: LocalJobRecord[],
   incentive: IncentiveJob[]
 ): JobView[] {
-  // computeStart returns jobIds as "<clusterHash>-<id>", but getComputeStatus
-  // and the incentive backend use the bare <id>. Dedup on the bare id (the part
-  // after the first '-', mirroring the node) plus trim/lowercase, so the two
-  // forms of the same job never render twice.
   const bareId = (id: string) => {
     const s = (id ?? '').trim()
     const i = s.indexOf('-')
@@ -86,8 +79,6 @@ export function mergeJobs(
     incentiveMap.set(bareId(job.jobId), job)
   }
 
-  // One output entry per normalized id, so repeated ids within the local
-  // store also collapse (the old code only deduped local-vs-incentive).
   const byId = new Map<string, JobView>()
 
   for (const rec of local) {
@@ -101,11 +92,7 @@ export function mergeJobs(
       const incStatus = mapStatus(inc.statusText, inc.isRunning)
       const status = statusRank(incStatus) >= statusRank(localStatus) ? incStatus : localStatus
       byId.set(key, {
-        // Keep the local id: it carries the "<clusterHash>-<id>" prefix the node
-        // needs to route View logs / Download / status to the right cluster.
         jobId: rec.jobId,
-        // Backend-persisted name (metadata.name) is authoritative; local name
-        // is the fallback until the monitor indexes the fresh job.
         name: inc.name || rec.name,
         status,
         envLabel: inc.environment || rec.envLabel,
@@ -135,8 +122,6 @@ export function mergeJobs(
     }
     byId.set(key, {
       jobId: inc.jobId,
-      // Show the persisted friendly name (metadata.name); fall back to the raw
-      // jobId for jobs started before naming existed.
       name: inc.name || inc.jobId,
       status: mapStatus(inc.statusText, inc.isRunning),
       envLabel: inc.environment,

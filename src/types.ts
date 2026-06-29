@@ -7,9 +7,6 @@ import {
   PersistentStorageFileEntry
 } from '@oceanprotocol/lib'
 
-// A compute resource plus the optional human-readable name the dashboard
-// sends for GPUs (e.g. "NVIDIA H200"). The node only needs { id, amount };
-// description is display-only and is stripped before job submission.
 export type IdeResource = ComputeResourceRequest & { description?: string }
 
 export class SelectedConfig {

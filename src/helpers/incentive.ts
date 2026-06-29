@@ -28,7 +28,6 @@ interface ComputeJob {
   isRunning: boolean
   isFree: boolean
   environment: string
-  // The backend returns timestamps as strings (epoch seconds, fractional).
   dateCreated: string
   dateFinished: string
   payment?: { token?: string; cost?: number } | null
@@ -36,9 +35,6 @@ interface ComputeJob {
   metadata?: { [key: string]: string | number | boolean }
 }
 
-// The extension's libp2p dials WebSockets, not raw TCP. Nodes advertise both
-// (often a raw /tcp/ addr first), so order WS/WSS addrs first to ensure the
-// node URI picked downstream (cost estimate, job run) is actually dialable.
 function orderDialable(addrs: string[]): string[] {
   const isWs = (a: string) => /\/wss?\//.test(a)
   return [...addrs.filter(isWs), ...addrs.filter((a) => !isWs(a))]
@@ -121,7 +117,6 @@ export async function fetchComputeJobs(address: string): Promise<IncentiveJob[]>
     dateCreated: Number(job.dateCreated) || 0,
     dateFinished: Number(job.dateFinished) || undefined,
     outputsURL: job.outputsURL,
-    // Friendly name persisted on the job at start (metadata.name).
     name: job.metadata?.name ? String(job.metadata.name) : undefined
   }))
 }
