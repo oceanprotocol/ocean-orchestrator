@@ -370,6 +370,7 @@ body {
         <label for="tokenSelect">Fee token</label>
         <select id="tokenSelect"></select>
       </div>
+      <button class="btn btn-ghost btn-sm" id="viewNodeBtn" style="display:none;margin-top:var(--sp-3)">View node ↗</button>
     </div>
 
     <!-- Resources -->
@@ -825,6 +826,9 @@ function onEnvChange() {
     state.selectedFeeToken = '';
   }
 
+  // Show the dashboard link only when the selected env resolves to a node.
+  document.getElementById('viewNodeBtn').style.display = env && env.nodeId ? '' : 'none';
+
   applyEnvToSliders(env);
   scheduleCostEstimate();
   if (state.selectedFeeToken) fetchBalance(state.selectedFeeToken);
@@ -951,6 +955,16 @@ document.getElementById('addFundsBtn').addEventListener('click', () => {
   const nodeId = env ? env.nodeId : state.nodeId;
   if (nodeId) {
     vscode.postMessage({ type: 'openFunding', nodeId });
+  } else {
+    showToast('No node selected', 'error');
+  }
+});
+
+document.getElementById('viewNodeBtn').addEventListener('click', () => {
+  const env = state.envs.find((e) => e.envId === state.selectedEnvId);
+  const nodeId = env ? env.nodeId : state.nodeId;
+  if (nodeId) {
+    vscode.postMessage({ type: 'openNodeDashboard', nodeId });
   } else {
     showToast('No node selected', 'error');
   }

@@ -59,7 +59,7 @@ import {
   getSelectedJobId,
   setSelectedJobId
 } from './helpers/jobStore'
-import { BASE_CHAIN_ID, escrowFundingUrl, dashboardConnectUrl } from './helpers/constants'
+import { BASE_CHAIN_ID, escrowFundingUrl, dashboardConnectUrl, nodeDashboardUrl } from './helpers/constants'
 
 // @oceanprotocol/lib bundles libp2p's browser user-agent helper which reads
 // globalThis.navigator.userAgent. VSCode's extension host defines `navigator`
@@ -232,7 +232,6 @@ export async function activate(context: vscode.ExtensionContext) {
       archiveIndex: number | null
       archiveSize: number
       resultsFolderPath: string
-      downloadCount: number
       logResults: Array<{ index: number; filename: string }>
     }
   >()
@@ -521,6 +520,7 @@ export async function activate(context: vscode.ExtensionContext) {
             outputChannel.appendLine(`Starting compute job with ID: ${jobId}`)
 
             let logStreamStarted = false
+            let lastStatusText: string | undefined
 
             while (true) {
               console.log('Checking job status...')
@@ -531,7 +531,12 @@ export async function activate(context: vscode.ExtensionContext) {
               console.log('Job status:', status)
               console.log('Status text:', status.statusText)
               progress.report({ message: `${status.statusText}` })
-              outputChannel.appendLine(`Job status: ${status.statusText}`)
+              // Only log status transitions to the channel — repeating the same
+              // line every poll would interleave with the streaming algorithm logs.
+              if (status.statusText !== lastStatusText) {
+                outputChannel.appendLine(`Job status: ${status.statusText}`)
+                lastStatusText = status.statusText
+              }
 
               if (status.statusText.includes('Running algorithm') && !logStreamStarted) {
                 logStreamStarted = true
@@ -609,7 +614,6 @@ export async function activate(context: vscode.ExtensionContext) {
                     archiveIndex: archive ? archive.index : null,
                     archiveSize: archive?.filesize ?? 0,
                     resultsFolderPath,
-                    downloadCount: 0,
                     logResults: resultsWithoutArchive.map((r) => ({
                       index: r.index,
                       filename: r.filename
@@ -746,17 +750,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
                 if (!abortController.signal.aborted) {
                   if (job.archiveIndex != null) {
-                    job.downloadCount += 1
-                    const prefix =
-                      job.downloadCount === 1
-                        ? 'result-output'
-                        : `result-output(${job.downloadCount})`
                     const filePath = await saveOutput(
                       config,
                       jobId,
                       job.archiveIndex,
                       job.resultsFolderPath,
-                      prefix,
+                      'result-output',
                       onDownloadProgress,
                       job.archiveSize > 0 ? job.archiveSize : undefined,
                       abortController.signal,
@@ -1046,6 +1045,11 @@ export async function activate(context: vscode.ExtensionContext) {
           case 'openFunding': {
             vscode.env.openExternal(vscode.Uri.parse(escrowFundingUrl()))
             reply({ type: 'fundingOpened', requestId })
+            return
+          }
+          case 'openNodeDashboard': {
+            vscode.env.openExternal(vscode.Uri.parse(nodeDashboardUrl(data.nodeId)))
+            reply({ type: 'nodeDashboardOpened', requestId })
             return
           }
           case 'mountFromStorage': {

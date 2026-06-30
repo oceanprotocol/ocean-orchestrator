@@ -601,6 +601,21 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       padding: var(--sp-2);
       text-align: center;
     }
+    .jobs-pager {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--sp-2);
+      margin-top: var(--sp-1);
+    }
+    .jobs-pager-info {
+      font-size: var(--fs-xs);
+      color: var(--vscode-descriptionForeground);
+    }
+    .jobs-pager .btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
 
     /* Download results: primary style, matching the Run button */
     #downloadBtn {
@@ -812,7 +827,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     const DOCKER_PROJECT_TYPE = '${Language.DOCKER_IMAGE}';
     let runningJobId = null;
     const JOBS_PAGE = 6;
-    let jobsShown = JOBS_PAGE;
+    let jobsPage = 0;
     let timerInterval = null;
     let jobs = [];
     let selectedJobId = null;
@@ -1253,8 +1268,11 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         if (br && !ar) return 1;
         return toMs(b.createdAt) - toMs(a.createdAt);
       });
-      if (jobsShown < JOBS_PAGE) jobsShown = JOBS_PAGE;
-      const visible = sorted.slice(0, jobsShown);
+      const totalPages = Math.max(1, Math.ceil(sorted.length / JOBS_PAGE));
+      if (jobsPage > totalPages - 1) jobsPage = totalPages - 1;
+      if (jobsPage < 0) jobsPage = 0;
+      const start = jobsPage * JOBS_PAGE;
+      const visible = sorted.slice(start, start + JOBS_PAGE);
       let html = visible.map((j) => {
         const sel = j.jobId === selectedJobId ? ' selected' : '';
         const status = jobEffStatus(j);
@@ -1272,9 +1290,14 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           '</div>'
         );
       }).join('');
-      const remaining = sorted.length - visible.length;
-      if (remaining > 0) {
-        html += '<button id="jobsMoreBtn" class="btn btn-sm btn-ghost" style="width:100%;margin-top:var(--sp-1);">Show ' + remaining + ' more</button>';
+      if (totalPages > 1) {
+        const prevDis = jobsPage === 0 ? ' disabled' : '';
+        const nextDis = jobsPage >= totalPages - 1 ? ' disabled' : '';
+        html += '<div class="jobs-pager">' +
+          '<button id="jobsPrevBtn" class="btn btn-sm btn-ghost"' + prevDis + '>&#8249; Prev</button>' +
+          '<span class="jobs-pager-info">' + (jobsPage + 1) + ' / ' + totalPages + '</span>' +
+          '<button id="jobsNextBtn" class="btn btn-sm btn-ghost"' + nextDis + '>Next &#8250;</button>' +
+          '</div>';
       }
       jobsListEl.innerHTML = html;
 
@@ -1291,11 +1314,16 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           vscode.postMessage({ type: 'viewJobLogs', jobId: id });
         });
       });
-      const moreBtn = document.getElementById('jobsMoreBtn');
-      if (moreBtn) {
-        moreBtn.addEventListener('click', () => {
-          jobsShown += JOBS_PAGE;
-          renderJobs();
+      const prevBtn = document.getElementById('jobsPrevBtn');
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (jobsPage > 0) { jobsPage -= 1; renderJobs(); }
+        });
+      }
+      const nextBtn = document.getElementById('jobsNextBtn');
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          jobsPage += 1; renderJobs();
         });
       }
     }
@@ -1486,6 +1514,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
 
         case 'jobStarted':
           runningJobId = msg.jobId || null;
+          jobsPage = 0;
           // Auto-select the started job so Stop/logs appear immediately
           if (runningJobId) {
             selectedJobId = runningJobId;

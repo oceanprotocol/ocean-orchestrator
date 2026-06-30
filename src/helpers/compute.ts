@@ -451,6 +451,13 @@ async function attemptSaveOutput(
   }
 }
 
+function nextOutputPrefix(dir: string, base: string): string {
+  if (!fs.existsSync(path.join(dir, `${base}.tar`))) return base
+  let n = 2
+  while (fs.existsSync(path.join(dir, `${base}(${n}).tar`))) n++
+  return `${base}(${n})`
+}
+
 export async function saveOutput(
   config: SelectedConfig,
   jobId: string,
@@ -464,11 +471,12 @@ export async function saveOutput(
 ): Promise<string> {
   const baseDir = destinationFolder || path.join(process.cwd(), 'results')
   const resultsDir = path.join(baseDir, folderName || jobId)
-  const filePath = path.join(resultsDir, `${prefix}.tar`)
   await fs.promises.mkdir(resultsDir, { recursive: true })
+  const resolvedPrefix = nextOutputPrefix(resultsDir, prefix)
+  const filePath = path.join(resultsDir, `${resolvedPrefix}.tar`)
 
   return withRetrial(() =>
-    attemptSaveOutput(config, jobId, index, filePath, resultsDir, prefix, onProgress, totalSize, cancelSignal)
+    attemptSaveOutput(config, jobId, index, filePath, resultsDir, resolvedPrefix, onProgress, totalSize, cancelSignal)
   )
 }
 

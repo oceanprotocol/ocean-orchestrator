@@ -31,6 +31,10 @@ export function dashboardConnectUrl(): string {
   return `${DASHBOARD_URL}/run-job/environments`
 }
 
+export function nodeDashboardUrl(nodeId: string): string {
+  return `${DASHBOARD_URL}/nodes/${nodeId}`
+}
+
 export const defaultBootstrapAddresses = [
   '/ip4/212.146.66.248/tcp/30080/p2p/16Uiu2HAmTC7cW9fb5ooFUupm6sAkcRJHHLGhiq2Bor8CzAAwFJCo',
   '/dns4/node1.oceanprotocol.com/tcp/9000/p2p/16Uiu2HAmLhRDqfufZiQnxvQs2XHhd6hwkLSPfjAQg1gH8wgRixiP',
