@@ -94,6 +94,18 @@ export function setSelectedProject(p: { algorithmPath: string; resultsFolderPath
   globalContext?.globalState.update('ocean.selectedProject', p)
 }
 
+function isGpuResource(r: any): boolean {
+  return (r?.type || '').toLowerCase() === 'gpu' || (r?.id || '').toLowerCase().includes('gpu')
+}
+
+// Must match the webview's GPU grouping key so requested and live GPUs line up.
+const gpuGroupKey = (r: any): string => r?.description || r?.id
+
+function mergeLiveInUse<T extends { id: string }>(resources: T[], liveResources: any[]): T[] {
+  const liveById = new Map((liveResources || []).map((r: any) => [r.id, r]))
+  return resources.map((r) => (liveById.get(r.id)?.inUse != null ? { ...r, inUse: liveById.get(r.id).inUse } : r))
+}
+
 async function pushEnvInfo() {
   if (!provider || !config.address || config.isFreeCompute || !config.environmentId || !config.feeToken) {
     provider?.sendMessage({ type: 'envInfo', cost: null, balance: null, symbol: '' })
@@ -103,11 +115,16 @@ async function pushEnvInfo() {
   const symbol = await getTokenSymbol(config.feeToken).catch(() => '')
   let cost: number | null = null
   let balance: number | null = null
-  let available: { id: string; max: number }[] = []
+  let available: { id: string; max: number; inUse?: number }[] = []
   try {
     const env = (await fetchPaidEnvironments()).find((e) => e.envId === config.environmentId)
     if (env) {
       available = (env.resources || []).map((r: any) => ({ id: r.id, max: r.max ?? r.maximum ?? r.total }))
+      try {
+        const liveEnv = (await getComputeEnvironments(config.multiaddresses ?? env.multiaddrs))
+          ?.find((e: any) => e.id === config.environmentId)
+        if (liveEnv?.resources) available = mergeLiveInUse(available, liveEnv.resources)
+      } catch { /* fall back to incentive API data */ }
       const r = await estimateCost({
         env: { ...env, multiaddrs: config.multiaddresses ?? env.multiaddrs },
         resources: config.resources || [],
@@ -459,6 +476,17 @@ export async function activate(context: vscode.ExtensionContext) {
             const persistentAssets = await resolvePersistentMountAssets(progress)
             const outputBucketId = outputBucketRegistry.get(currentMountScope())
 
+            // Re-resolve GPU ids against live node data so back-to-back jobs don't
+            // reuse a GPU the previous job just locked.
+            if (!config.isFreeCompute && config.environmentId && config.multiaddresses && config.resources) {
+              let live: any[] | undefined
+              try {
+                live = (await getComputeEnvironments(config.multiaddresses))
+                  ?.find((e: any) => e.id === config.environmentId)?.resources
+              } catch { /* fetch failed — submit with the saved ids */ }
+              if (live) config.updateFields({ resources: resolveAvailableGpuIds(config.resources, live) })
+            }
+
             const computeResponse = await computeStart(
               config,
               algorithmContent,
@@ -515,6 +543,14 @@ export async function activate(context: vscode.ExtensionContext) {
             })
             invalidateEscrowBalance() // funds were just locked — read fresh
             pushEnvInfo()
+            // Patch the panel's availability locally instead of a fresh fetch.
+            if (config.environmentId && config.resources) {
+              ConfigureJobPanel.currentPanel?.sendMessage({
+                type: 'resourcesConsumed',
+                envId: config.environmentId,
+                consumed: config.resources.map((r) => ({ id: r.id, amount: r.amount ?? 1 }))
+              })
+            }
 
             outputChannel.show()
             outputChannel.appendLine(`Starting compute job with ID: ${jobId}`)
@@ -970,6 +1006,23 @@ export async function activate(context: vscode.ExtensionContext) {
       })
     )
 
+    // Re-map requested GPUs to ids free right now (by model); throws if one is taken.
+    function resolveAvailableGpuIds(requested: any[], liveResources: any[]): any[] {
+      if (!requested.some(isGpuResource)) return requested
+      const freeByModel = new Map<string, string[]>()
+      for (const r of liveResources) {
+        if (!isGpuResource(r) || (r.inUse ?? 0) > 0) continue
+        const key = gpuGroupKey(r)
+        ;(freeByModel.get(key) ?? freeByModel.set(key, []).get(key)!).push(r.id)
+      }
+      return requested.map((r) => {
+        if (!isGpuResource(r)) return r
+        const id = freeByModel.get(gpuGroupKey(r))?.shift()
+        if (!id) throw new Error(`No free "${gpuGroupKey(r)}" GPU right now — lower the GPU count and try again.`)
+        return { id, amount: 1, description: r.description }
+      })
+    }
+
     // Apply a paid-job selection from the Configure panel (shared by saveConfig
     // and runJob): resolve the env's node addr and update the live config.
     async function applyPaidConfigFromPanel(data: any) {
@@ -997,6 +1050,21 @@ export async function activate(context: vscode.ExtensionContext) {
         switch (data.type) {
           case 'listEnvs': {
             const envs = await fetchPaidEnvironments()
+            // One live fetch for the configured node enriches all its envs with inUse.
+            const anchorEnvId = config.environmentId ?? envs[0]?.envId
+            const anchorEnv = envs.find((e) => e.envId === anchorEnvId)
+            if (anchorEnv?.multiaddrs) {
+              try {
+                const liveEnvs = await getComputeEnvironments(anchorEnv.multiaddrs)
+                for (const env of envs) {
+                  if (env.multiaddrs?.[0] !== anchorEnv.multiaddrs[0]) continue
+                  const liveEnv = liveEnvs?.find((le: any) => le.id === env.envId)
+                  if (liveEnv?.resources) {
+                    env.resources = mergeLiveInUse(env.resources || [], liveEnv.resources)
+                  }
+                }
+              } catch { /* fall back to incentive API data */ }
+            }
             reply({ type: 'envsLoaded', requestId, envs })
             return
           }
@@ -1037,6 +1105,7 @@ export async function activate(context: vscode.ExtensionContext) {
             return
           }
           case 'saveConfig': {
+            // GPU ids are re-resolved at submit time (startComputeJob), not here.
             await applyPaidConfigFromPanel(data)
             pushEnvInfo()
             reply({ type: 'configSaved', requestId })

@@ -1153,14 +1153,16 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           }
         }
         // Available maxes from the env (selected / available, X/Y).
+        // Use max - inUse for all resource types when live inUse data is present.
         const maxById = {};
         (envInfo.available || []).forEach((r) => {
           if (!r.id) return;
           const kind = resourceKind(r.id);
-          if (kind === 'cpu') maxById.cpu = r.max;
-          else if (kind === 'ram') maxById.ram = r.max;
-          else if (kind === 'disk') maxById.disk = r.max;
-          else maxById.gpu = (maxById.gpu || 0) + r.max;
+          const avail = r.inUse != null ? r.max - r.inUse : r.max;
+          if (kind === 'cpu') maxById.cpu = avail;
+          else if (kind === 'ram') maxById.ram = avail;
+          else if (kind === 'disk') maxById.disk = avail;
+          else maxById.gpu = (maxById.gpu || 0) + avail;
         });
         const maxRunStr = fmtDuration(jobSummary?.duration);
         // Selected value stays prominent; "/ max" is a small muted suffix.

@@ -164,70 +164,7 @@ body {
   white-space: nowrap;
 }
 
-/* GPU checkboxes */
-.gpu-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
-}
-
-.gpu-label {
-  font-size: var(--fs-sm);
-  color: var(--vscode-descriptionForeground);
-  width: 90px;
-  flex-shrink: 0;
-}
-
-.gpu-checks {
-  display: flex;
-  gap: var(--sp-3);
-  flex-wrap: wrap;
-}
-
-.gpu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  font-size: var(--fs-sm);
-  cursor: pointer;
-}
-
-.gpu-item input[type='checkbox'] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  border: 1px solid var(--vscode-checkbox-border, var(--vscode-panel-border));
-  border-radius: 3px;
-  background: var(--vscode-checkbox-background, var(--vscode-input-background));
-  cursor: pointer;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.gpu-item input[type='checkbox']:checked {
-  background: var(--vscode-button-background);
-  border-color: var(--vscode-button-background);
-}
-
-.gpu-item input[type='checkbox']:checked::after {
-  content: '';
-  position: absolute;
-  left: 5px;
-  top: 2px;
-  width: 4px;
-  height: 8px;
-  border: solid var(--vscode-button-foreground);
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
-
-.gpu-item input[type='checkbox']:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: 1px;
-}
+/* GPU slider rows — injected into .slider-grid, same visual language as CPU/RAM/Disk */
 
 /* Input row for dataset */
 .input-row {
@@ -536,11 +473,15 @@ function getEnvResource(env, id) {
 function resourceBounds(env, id, defaults) {
   const r = getEnvResource(env, id);
   if (!r) return defaults;
+  const min = r.minimum ?? r.min ?? defaults.min;
+  const total = r.maximum ?? r.max ?? defaults.max;
+  // Cap by what's free, but never below the minimum (a max < min slider is degenerate).
+  const available = r.inUse != null ? Math.max(min, total - r.inUse) : total;
   return {
-    min: r.minimum ?? r.min ?? defaults.min,
-    max: r.maximum ?? r.max ?? defaults.max,
+    min,
+    max: available,
     step: r.increment ?? r.step ?? defaults.step,
-    defaultVal: r.default ?? defaults.defaultVal
+    defaultVal: Math.min(r.default ?? defaults.defaultVal, available)
   };
 }
 
@@ -606,41 +547,43 @@ function applyEnvToSliders(env) {
 
   updateReadouts();
 
-  // GPU: look for resources with type 'gpu' or id containing 'gpu'
   const gpuResources = (env.resources || []).filter(isGpuResource);
-  // Drop selections from a previously-selected env so stale GPU ids don't leak
-  // into estimateCost/saveConfig payloads for this env.
+  // Drop stale selections so ids from a previous env don't leak into payloads.
   const validGpuIds = new Set(gpuResources.map((r) => r.id));
   for (const id of Object.keys(state.gpuSelections)) {
     if (!validGpuIds.has(id)) delete state.gpuSelections[id];
   }
-  const gpuSection = document.getElementById('gpuSection');
-  const gpuChecks = document.getElementById('gpuChecks');
-  if (gpuResources.length > 0) {
-    gpuChecks.innerHTML = '';
-    for (const gr of gpuResources) {
-      const id = 'gpu_' + gr.id;
-      const item = document.createElement('label');
-      item.className = 'gpu-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.id = id;
-      cb.checked = !!state.gpuSelections[gr.id];
-      cb.addEventListener('change', () => {
-        state.gpuSelections[gr.id] = cb.checked;
-        scheduleCostEstimate();
-      });
-      const span = document.createElement('span');
-      // Show the actual GPU name (e.g. "NVIDIA H200"), not the id ("gpu0").
-      span.textContent = gr.description || gr.label || gr.id;
-      item.appendChild(cb);
-      item.appendChild(span);
-      gpuChecks.appendChild(item);
-    }
-    gpuSection.style.display = '';
-  } else {
-    gpuSection.style.display = 'none';
-    state.gpuSelections = {};
+  // Inject GPU rows into the slider grid, clearing any from a previous env.
+  const sliderGrid = document.getElementById('sliderGrid');
+  sliderGrid.querySelectorAll('.gpu-dyn').forEach((el) => el.remove());
+  document.getElementById('gpuSection').style.display = 'none';
+  if (gpuResources.length === 0) { state.gpuSelections = {}; return; }
+
+  // Group by model, free (inUse 0) first so the first N ids are the free ones.
+  const groups = {};
+  for (const gr of gpuResources) {
+    const key = gr.description || gr.id;
+    (groups[key] = groups[key] || { label: key, resources: [] }).resources.push(gr);
+  }
+  const mk = (tag, cls, props) => Object.assign(document.createElement(tag), { className: cls, ...props });
+  for (const group of Object.values(groups)) {
+    group.resources.sort((a, b) => (a.inUse || 0) - (b.inUse || 0));
+    const ids = group.resources.map((r) => r.id);
+    const max = group.resources.filter((r) => !(r.inUse > 0)).length; // free count = slider max
+    let count = Math.min(ids.filter((id) => state.gpuSelections[id]).length, max);
+    const setSel = (n) => ids.forEach((id, i) => { state.gpuSelections[id] = i < n; });
+
+    const labelEl = mk('span', 'slider-label gpu-dyn', { textContent: group.label, title: group.label });
+    const sliderEl = mk('input', 'gpu-dyn', { type: 'range', min: '0', max: String(max), step: '1', value: String(count) });
+    const valEl = mk('span', 'slider-unit gpu-dyn', { textContent: count + ' / ' + max });
+    sliderEl.addEventListener('input', () => {
+      count = Number(sliderEl.value);
+      valEl.textContent = count + ' / ' + max;
+      setSel(count);
+      scheduleCostEstimate();
+    });
+    setSel(count); // initialise without a cost re-estimate
+    sliderGrid.append(labelEl, sliderEl, valEl);
   }
 }
 
@@ -705,7 +648,7 @@ function buildResourcePayload() {
   for (const [id, checked] of Object.entries(state.gpuSelections)) {
     if (!checked) continue;
     const gr = ((env && env.resources) || []).find((r) => r.id === id);
-    base.push({ id, amount: 1, description: gr && (gr.description || gr.label) });
+    base.push({ id, amount: 1, description: gr && gr.description });
   }
   return base;
 }
@@ -879,6 +822,18 @@ window.addEventListener('message', (event) => {
       state.envs = data.envs || [];
       populateEnvSelect(state.envs);
       return;
+
+    case 'resourcesConsumed': {
+      // A job just started — bump inUse locally so sliders reflect reduced availability.
+      const env = state.envs.find((e) => e.envId === data.envId);
+      if (env && Array.isArray(env.resources)) {
+        const byId = Object.fromEntries((data.consumed || []).map((c) => [c.id, c.amount]));
+        env.resources = env.resources.map((r) =>
+          byId[r.id] ? { ...r, inUse: (r.inUse || 0) + byId[r.id] } : r);
+        if (env.envId === state.selectedEnvId) applyEnvToSliders(env);
+      }
+      return;
+    }
 
     case 'costEstimated':
       // Handled via call() resolution
