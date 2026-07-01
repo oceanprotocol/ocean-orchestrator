@@ -36,8 +36,14 @@ interface ComputeJob {
 }
 
 function orderDialable(addrs: string[]): string[] {
-  const isWs = (a: string) => /\/wss?\//.test(a)
-  return [...addrs.filter(isWs), ...addrs.filter((a) => !isWs(a))]
+  const rank = (a: string): number => {
+    const ws = /\/ws(\/|$)/.test(a)
+    const tls = /\/tls\//.test(a)
+    if (ws && tls) return 0
+    if (ws) return 1
+    return 2
+  }
+  return [...addrs].sort((a, b) => rank(a) - rank(b))
 }
 
 export async function fetchPaidEnvironments(
@@ -95,6 +101,10 @@ export async function fetchPaidEnvironments(
   }
 
   return result
+}
+
+export async function fetchEnvById(envId: string): Promise<EnvSummary | undefined> {
+  return (await fetchPaidEnvironments(envId, 5)).find((e) => e.envId === envId)
 }
 
 export async function fetchComputeJobs(address: string): Promise<IncentiveJob[]> {

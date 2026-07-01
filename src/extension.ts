@@ -45,11 +45,12 @@ import {
 import { randomUUID } from 'crypto'
 import {
   fetchPaidEnvironments,
+  fetchEnvById,
   fetchComputeJobs,
   requestJobRefresh
 } from './helpers/incentive'
 import { estimateCost } from './helpers/cost'
-import { getEscrowBalance, getTokenSymbol, invalidateEscrowBalance } from './helpers/escrow'
+import { getEscrowBalance, getTokenSymbol, invalidateEscrowBalance, getNodeAuthorization } from './helpers/escrow'
 import { generateJobName, jobResultsFolderName } from './helpers/jobNames'
 import {
   addLocalJob,
@@ -106,6 +107,25 @@ function mergeLiveInUse<T extends { id: string }>(resources: T[], liveResources:
   return resources.map((r) => (liveById.get(r.id)?.inUse != null ? { ...r, inUse: liveById.get(r.id).inUse } : r))
 }
 
+async function liveEnvResources(
+  multiaddrs: string[] | undefined,
+  envId: string
+): Promise<any[] | null> {
+  try {
+    const liveEnv = (await getComputeEnvironments(multiaddrs))?.find((le: any) => le.id === envId)
+    return liveEnv?.resources ?? null
+  } catch { /* fall back to incentive API data */ }
+  return null
+}
+
+async function liveResourcesFor(
+  env: { envId: string; multiaddrs?: string[]; resources?: any[] },
+  multiaddrs?: string[]
+): Promise<any[]> {
+  const live = await liveEnvResources(multiaddrs ?? env.multiaddrs, env.envId)
+  return live ? mergeLiveInUse(env.resources || [], live) : env.resources || []
+}
+
 async function pushEnvInfo() {
   if (!provider || !config.address || config.isFreeCompute || !config.environmentId || !config.feeToken) {
     provider?.sendMessage({ type: 'envInfo', cost: null, balance: null, symbol: '' })
@@ -117,16 +137,10 @@ async function pushEnvInfo() {
   let balance: number | null = null
   let available: { id: string; max: number; inUse?: number }[] = []
   try {
-    const env = (await fetchPaidEnvironments(config.environmentId, 5)).find(
-      (e) => e.envId === config.environmentId
-    )
+    const env = await fetchEnvById(config.environmentId)
     if (env) {
-      available = (env.resources || []).map((r: any) => ({ id: r.id, max: r.max ?? r.maximum ?? r.total }))
-      try {
-        const liveEnv = (await getComputeEnvironments(config.multiaddresses ?? env.multiaddrs))
-          ?.find((e: any) => e.id === config.environmentId)
-        if (liveEnv?.resources) available = mergeLiveInUse(available, liveEnv.resources)
-      } catch { /* fall back to incentive API data */ }
+      const merged = await liveResourcesFor(env, config.multiaddresses)
+      available = merged.map((r: any) => ({ id: r.id, max: r.max ?? r.maximum ?? r.total, inUse: r.inUse }))
       const r = await estimateCost({
         env: { ...env, multiaddrs: config.multiaddresses ?? env.multiaddrs },
         resources: config.resources || [],
@@ -1028,8 +1042,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Apply a paid-job selection from the Configure panel (shared by saveConfig
     // and runJob): resolve the env's node addr and update the live config.
     async function applyPaidConfigFromPanel(data: any) {
-      const envs = await fetchPaidEnvironments(data.envId, 5)
-      const env = envs.find((e) => e.envId === data.envId)
+      const env = await fetchEnvById(data.envId)
       if (!env) {
         throw new Error('Selected environment is no longer available')
       }
@@ -1054,31 +1067,24 @@ export async function activate(context: vscode.ExtensionContext) {
             const query = typeof data.query === 'string' ? data.query.trim() : ''
             const initial = !!data.initial
             const envs = await fetchPaidEnvironments(query || undefined, 50)
-            if (initial) {
-              if (config.environmentId && !envs.some((e) => e.envId === config.environmentId)) {
-                const [anchor] = await fetchPaidEnvironments(config.environmentId, 5)
-                if (anchor) envs.unshift(anchor)
-              }
-              const anchorEnvId = config.environmentId ?? envs[0]?.envId
-              const anchorEnv = envs.find((e) => e.envId === anchorEnvId)
-              if (anchorEnv?.multiaddrs) {
-                try {
-                  const liveEnvs = await getComputeEnvironments(anchorEnv.multiaddrs)
-                  for (const env of envs) {
-                    if (env.multiaddrs?.[0] !== anchorEnv.multiaddrs[0]) continue
-                    const liveEnv = liveEnvs?.find((le: any) => le.id === env.envId)
-                    if (liveEnv?.resources) {
-                      env.resources = mergeLiveInUse(env.resources || [], liveEnv.resources)
-                    }
-                  }
-                } catch { /* fall back to incentive API data */ }
-              }
+            if (initial && config.environmentId && !envs.some((e) => e.envId === config.environmentId)) {
+              const anchor = await fetchEnvById(config.environmentId)
+              if (anchor) envs.unshift(anchor)
             }
             reply({ type: 'envsLoaded', requestId, envs, query, initial })
             return
           }
+          case 'refreshEnvResources': {
+            let resources = await liveEnvResources(data.multiaddrs, data.envId)
+            if (!resources) {
+              const env = await fetchEnvById(data.envId)
+              resources = env?.resources ?? null
+            }
+            reply({ type: 'envResourcesRefreshed', requestId, envId: data.envId, resources })
+            return
+          }
           case 'estimateCost': {
-            const env = (await fetchPaidEnvironments(data.envId, 5)).find((e) => e.envId === data.envId)
+            const env = await fetchEnvById(data.envId)
             if (!env) {
               reply({ type: 'configureJobError', requestId, message: 'Environment not found' })
               return
@@ -1096,7 +1102,13 @@ export async function activate(context: vscode.ExtensionContext) {
               feeToken: data.feeToken
             })
             lastEstimatedCost = result.cost
-            reply({ type: 'costEstimated', requestId, cost: result.cost, minLockSeconds: result.minLockSeconds })
+            reply({
+              type: 'costEstimated',
+              requestId,
+              cost: result.cost,
+              minLockSeconds: result.minLockSeconds,
+              amountWei: result.amountWei
+            })
             return
           }
           case 'getEscrowBalance': {
@@ -1123,6 +1135,31 @@ export async function activate(context: vscode.ExtensionContext) {
           case 'openFunding': {
             vscode.env.openExternal(vscode.Uri.parse(escrowFundingUrl()))
             reply({ type: 'fundingOpened', requestId })
+            return
+          }
+          case 'copyNodeId': {
+            await vscode.env.clipboard.writeText(String(data.nodeId || ''))
+            reply({ type: 'nodeIdCopied', requestId })
+            return
+          }
+          case 'checkEnvAuth': {
+            if (config.isFreeCompute || !config.address) {
+              reply({ type: 'envAuthChecked', requestId, envId: data.envId, authorized: true, reason: 'ok', count: 0 })
+              return
+            }
+            const env = await fetchEnvById(data.envId)
+            if (!env) {
+              reply({ type: 'envAuthChecked', requestId, envId: data.envId, authorized: false, reason: 'none', count: 0 })
+              return
+            }
+            const res = await getNodeAuthorization(
+              data.feeToken || config.feeToken,
+              config.address,
+              env.consumerAddress,
+              data.amountWei,
+              data.minLockSeconds
+            )
+            reply({ type: 'envAuthChecked', requestId, envId: data.envId, ...res })
             return
           }
           case 'openNodeDashboard': {

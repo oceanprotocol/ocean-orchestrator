@@ -5,7 +5,7 @@ import { formatUnitsToNumber as denominateCost, getTokenDecimals } from './escro
 
 export { denominateCost }
 
-type CostResult = { cost: number; minLockSeconds: number }
+type CostResult = { cost: number; minLockSeconds: number; amountWei: string }
 const costCache = new Map<string, { value: CostResult; at: number }>()
 const COST_TTL_MS = 60_000
 
@@ -59,7 +59,7 @@ export async function estimateCost(args: {
 
   const cost = denominateCost(String(amount), decimals)
 
-  const value = { cost, minLockSeconds }
+  const value = { cost, minLockSeconds, amountWei: String(amount) }
   costCache.set(cacheKey, { value, at: Date.now() })
   return value
 }

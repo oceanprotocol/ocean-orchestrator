@@ -52,6 +52,58 @@ export async function getEscrowBalance(feeToken: string, payerAddress: string): 
   return balance
 }
 
+export type NodeAuthReason = 'ok' | 'none' | 'amount' | 'duration' | 'counts'
+export type NodeAuthResult = { authorized: boolean; reason: NodeAuthReason; count: number }
+
+const authCache = new Map<string, { value: any[]; at: number }>()
+const AUTH_TTL_MS = 5_000
+
+export function invalidateEscrowAuth(): void {
+  authCache.clear()
+}
+
+export async function getNodeAuthorization(
+  feeToken: string,
+  payer: string,
+  payee: string,
+  amountWei?: string,
+  minLockSeconds?: number
+): Promise<NodeAuthResult> {
+  const key = `${(feeToken || '').toLowerCase()}|${(payer || '').toLowerCase()}|${(payee || '').toLowerCase()}`
+  const cached = authCache.get(key)
+  let auths: any[]
+  if (cached && Date.now() - cached.at < AUTH_TTL_MS) {
+    auths = cached.value
+  } else {
+    const provider = new ethers.JsonRpcProvider(getBaseRpcUrl())
+    const escrow = new EscrowContract(ESCROW_ADDRESS_BASE, provider as any, undefined)
+    auths = (await escrow.getAuthorizations(feeToken, payer, payee)) as any[]
+    authCache.set(key, { value: auths, at: Date.now() })
+  }
+
+  const count = Array.isArray(auths) ? auths.length : 0
+  if (count !== 1) {
+    return { authorized: false, reason: 'none', count }
+  }
+  const a = auths[0]
+  const maxLockedAmount = BigInt(a.maxLockedAmount ?? a[1])
+  const currentLockedAmount = BigInt(a.currentLockedAmount ?? a[2])
+  const maxLockSeconds = BigInt(a.maxLockSeconds ?? a[3])
+  const maxLockCounts = BigInt(a.maxLockCounts ?? a[4])
+  const currentLocks = BigInt(a.currentLocks ?? a[5])
+
+  if (amountWei != null && currentLockedAmount + BigInt(amountWei) > maxLockedAmount) {
+    return { authorized: false, reason: 'amount', count }
+  }
+  if (minLockSeconds != null && maxLockSeconds < BigInt(Math.ceil(minLockSeconds))) {
+    return { authorized: false, reason: 'duration', count }
+  }
+  if (currentLocks + BigInt(1) > maxLockCounts) {
+    return { authorized: false, reason: 'counts', count }
+  }
+  return { authorized: true, reason: 'ok', count }
+}
+
 const symbolCache = new Map<string, string>()
 
 export async function getTokenSymbol(feeToken: string): Promise<string> {

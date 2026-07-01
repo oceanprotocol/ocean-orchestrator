@@ -320,6 +320,44 @@ body {
   padding: var(--sp-2);
   opacity: 0.7;
 }
+.auth-status {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.auth-status.ok {
+  color: var(--vscode-testing-iconPassed, #3fb950);
+}
+.auth-status.warn {
+  color: var(--vscode-editorWarning-foreground, #d29922);
+}
+.auth-status.checking {
+  opacity: 0.7;
+}
+.node-id-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.node-id {
+  flex: 1;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--fs-sm);
+  opacity: 0.8;
+}
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.7;
+}
+.icon-btn:hover {
+  opacity: 1;
+}
 </style>
 </head>
 <body>
@@ -348,7 +386,11 @@ body {
         <label for="tokenSelect">Fee token</label>
         <select id="tokenSelect"></select>
       </div>
-      <button class="btn btn-ghost btn-sm" id="viewNodeBtn" style="display:none;margin-top:var(--sp-3)">View node ↗</button>
+      <div id="nodeIdRow" class="node-id-row" style="display:none">
+        <span id="nodeIdText" class="node-id"></span>
+        <button class="icon-btn" id="copyNodeIdBtn" title="Copy node id" aria-label="Copy node id"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+        <button class="btn btn-ghost btn-sm" id="viewNodeBtn">View node ↗</button>
+      </div>
     </div>
 
     <!-- Resources -->
@@ -416,11 +458,12 @@ body {
       <div id="balanceWarn" class="balance-warn" style="display:none">
         Insufficient balance to run this job
       </div>
+      <div id="authStatus" class="auth-status" style="display:none"></div>
 
       <hr class="cost-divider">
 
       <div class="footer-actions">
-        <button class="btn btn-ghost btn-sm" id="addFundsBtn">Add funds ↗</button>
+        <button class="btn btn-ghost btn-sm" id="addFundsBtn">Manage escrow balance ↗</button>
         <button class="btn btn-pri" id="saveBtn">Save</button>
       </div>
     </div>
@@ -448,6 +491,8 @@ const state = {
   comboActiveIndex: -1,
   envQuery: '',
   envSearching: false,
+  envAuth: null,
+  amountWei: null,
   selectedFeeToken: '',
   resources: { cpu: 1, ram: 1, disk: 1, durationSeconds: 3600 },
   gpuSelections: {},   // resourceId -> boolean
@@ -670,10 +715,12 @@ async function runCostEstimate() {
     });
     state.cost = res.cost ?? null;
     state.minLockSeconds = res.minLockSeconds ?? null;
+    state.amountWei = res.amountWei ?? null;
     const costEl = document.getElementById('costValue');
     costEl.textContent = state.cost != null ? state.cost.toFixed(4) + ' ' + tokenSymbol(state.selectedFeeToken) : '—';
     costEl.classList.remove('computing');
     updateBalanceWarning();
+    checkEnvAuth();
   } catch (e) {
     document.getElementById('costValue').textContent = 'estimate unavailable';
     state.cost = null;
@@ -762,7 +809,7 @@ function updateBalanceWarning() {
 // ============================================================
 function envDisplayText(env) {
   const summary = envResourceSummary(env);
-  return env.label + ' (' + shortNodeId(env.nodeId) + ')' + (summary ? ' — ' + summary : '');
+  return env.label + (summary ? ' — ' + summary : '');
 }
 
 function populateEnvSelect(envs) {
@@ -778,7 +825,7 @@ function populateEnvSelect(envs) {
   if (!envs.some((e) => e.envId === state.selectedEnvId)) {
     state.selectedEnvId = envs[0].envId;
   }
-  const sel = envs.find((e) => e.envId === state.selectedEnvId) || state.selectedEnv;
+  const sel = envs.find((e) => e.envId === state.selectedEnvId);
   if (sel) {
     state.selectedEnv = sel;
     input.value = envDisplayText(sel);
@@ -819,7 +866,7 @@ function renderEnvResults() {
       item.setAttribute('role', 'option');
       item.dataset.idx = String(i);
       const title = document.createElement('div');
-      title.textContent = env.label + ' (' + shortNodeId(env.nodeId) + ')';
+      title.textContent = env.label;
       item.appendChild(title);
       const summary = envResourceSummary(env);
       if (summary) {
@@ -873,11 +920,106 @@ function onEnvChange() {
   }
 
   // Show the dashboard link only when the selected env resolves to a node.
-  document.getElementById('viewNodeBtn').style.display = env && env.nodeId ? '' : 'none';
+  const nodeIdRow = document.getElementById('nodeIdRow');
+  if (env && env.nodeId) {
+    document.getElementById('nodeIdText').textContent = shortNodeId(env.nodeId);
+    nodeIdRow.style.display = '';
+  } else {
+    nodeIdRow.style.display = 'none';
+  }
 
   applyEnvToSliders(env);
+  state.cost = null;
+  state.amountWei = null;
+  state.minLockSeconds = null;
   scheduleCostEstimate();
+  checkEnvAuth();
+  refreshEnvResources();
   if (state.selectedFeeToken) fetchBalance(state.selectedFeeToken);
+}
+
+let resSeq = 0;
+async function refreshEnvResources() {
+  const env = state.selectedEnv;
+  if (!env || !env.envId) return;
+  const envId = env.envId;
+  const seq = ++resSeq;
+  try {
+    const res = await call('refreshEnvResources', { envId, multiaddrs: env.multiaddrs });
+    if (seq !== resSeq || !state.selectedEnv || state.selectedEnv.envId !== envId) return;
+    if (res.resources) {
+      state.selectedEnv.resources = res.resources;
+      applyEnvToSliders(state.selectedEnv);
+    }
+  } catch (e) { /* keep incentive-API resources */ }
+}
+
+let authSeq = 0;
+async function checkEnvAuth() {
+  if (!state.selectedEnvId || !state.selectedFeeToken) {
+    state.envAuth = null;
+    renderAuthStatus();
+    return;
+  }
+  const envId = state.selectedEnvId;
+  const seq = ++authSeq;
+  state.envAuth = { reason: 'checking' };
+  renderAuthStatus();
+  try {
+    const res = await call('checkEnvAuth', {
+      envId,
+      feeToken: state.selectedFeeToken,
+      amountWei: state.amountWei || undefined,
+      minLockSeconds: state.minLockSeconds || undefined
+    });
+    if (seq !== authSeq || res.envId !== state.selectedEnvId) return;
+    state.envAuth = { authorized: !!res.authorized, reason: res.reason };
+  } catch (e) {
+    if (seq !== authSeq) return;
+    state.envAuth = null;
+  }
+  renderAuthStatus();
+}
+
+function authWarnText(reason) {
+  switch (reason) {
+    case 'amount': return '⚠ Authorized amount is below this job cost. Increase it to run here.';
+    case 'duration': return '⚠ Authorization lock time is too short for this job.';
+    case 'counts': return '⚠ This node authorization has no free lock slots.';
+    default: return '⚠ This node is not authorized to spend your escrow.';
+  }
+}
+
+function renderAuthStatus() {
+  const el = document.getElementById('authStatus');
+  const a = state.envAuth;
+  if (!a) {
+    el.style.display = 'none';
+  } else if (a.reason === 'checking') {
+    el.className = 'auth-status checking';
+    el.textContent = 'Checking authorization…';
+    el.style.display = '';
+  } else if (a.authorized) {
+    el.className = 'auth-status ok';
+    el.textContent = '✓ Node authorized';
+    el.style.display = '';
+  } else {
+    el.className = 'auth-status warn';
+    el.textContent = authWarnText(a.reason);
+    el.style.display = '';
+  }
+  updateSaveEnabled();
+}
+
+function updateSaveEnabled() {
+  const btn = document.getElementById('saveBtn');
+  if (!btn) return;
+  const blocked =
+    !!state.selectedFeeToken &&
+    state.envAuth &&
+    state.envAuth.reason !== 'checking' &&
+    !state.envAuth.authorized;
+  btn.disabled = !!blocked;
 }
 
 // ============================================================
@@ -1079,6 +1221,15 @@ document.getElementById('viewNodeBtn').addEventListener('click', () => {
   } else {
     showToast('No node selected', 'error');
   }
+});
+
+document.getElementById('copyNodeIdBtn').addEventListener('click', async () => {
+  const env = state.selectedEnv;
+  if (!env || !env.nodeId) return;
+  try {
+    await call('copyNodeId', { nodeId: env.nodeId });
+    showToast('Node id copied');
+  } catch (e) { /* ignore */ }
 });
 
 document.getElementById('refreshEnvsBtn').addEventListener('click', loadEnvs);
