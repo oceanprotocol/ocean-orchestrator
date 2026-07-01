@@ -281,6 +281,45 @@ body {
   border-top: 1px solid var(--vscode-panel-border);
   margin: var(--sp-2) 0;
 }
+
+/* Searchable environment combobox */
+.combo {
+  position: relative;
+}
+.combo-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  z-index: 20;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.combo-item {
+  padding: var(--sp-1) var(--sp-2);
+  cursor: pointer;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.combo-item:last-child {
+  border-bottom: none;
+}
+.combo-item:hover,
+.combo-item.active {
+  background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+  color: var(--vscode-list-activeSelectionForeground, inherit);
+}
+.combo-sub {
+  font-size: var(--fs-sm);
+  opacity: 0.75;
+}
+.combo-empty {
+  padding: var(--sp-2);
+  opacity: 0.7;
+}
 </style>
 </head>
 <body>
@@ -299,10 +338,12 @@ body {
     <!-- Environment -->
     <div class="card">
       <p class="section-title">Environment</p>
-      <label for="envSelect">Compute environment</label>
-      <select id="envSelect">
-        <option value="">Loading environments…</option>
-      </select>
+      <label for="envSearch">Compute environment</label>
+      <div class="combo" id="envCombo">
+        <input type="text" id="envSearch" autocomplete="off"
+               placeholder="Search by name, node id, or GPU (e.g. h200)…">
+        <div class="combo-list" id="envResults" role="listbox" style="display:none"></div>
+      </div>
       <div class="token-row" id="tokenRow" style="display:none">
         <label for="tokenSelect">Fee token</label>
         <select id="tokenSelect"></select>
@@ -403,6 +444,10 @@ const SUPPORTED_TOKENS = ${JSON.stringify(
 const state = {
   envs: [],
   selectedEnvId: '',
+  selectedEnv: null,
+  comboActiveIndex: -1,
+  envQuery: '',
+  envSearching: false,
   selectedFeeToken: '',
   resources: { cpu: 1, ram: 1, disk: 1, durationSeconds: 3600 },
   gpuSelections: {},   // resourceId -> boolean
@@ -639,7 +684,7 @@ async function runCostEstimate() {
 }
 
 function buildResourcePayload() {
-  const env = state.envs.find((e) => e.envId === state.selectedEnvId);
+  const env = state.selectedEnv;
   const base = [
     { id: 'cpu', amount: state.resources.cpu },
     { id: 'ram', amount: state.resources.ram },
@@ -715,37 +760,95 @@ function updateBalanceWarning() {
 // ============================================================
 // Env select population
 // ============================================================
+function envDisplayText(env) {
+  const summary = envResourceSummary(env);
+  return env.label + ' (' + shortNodeId(env.nodeId) + ')' + (summary ? ' — ' + summary : '');
+}
+
 function populateEnvSelect(envs) {
-  const sel = document.getElementById('envSelect');
-  sel.innerHTML = '';
+  const input = document.getElementById('envSearch');
   if (!envs || envs.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'No environments available';
-    sel.appendChild(opt);
+    if (!state.selectedEnv) {
+      state.selectedEnvId = '';
+      input.value = '';
+      input.placeholder = 'No environments available';
+    }
     return;
   }
-  for (const env of envs) {
-    const opt = document.createElement('option');
-    opt.value = env.envId;
-    const summary = envResourceSummary(env);
-    opt.textContent =
-      env.label + ' (' + shortNodeId(env.nodeId) + ')' + (summary ? ' — ' + summary : '');
-    if (env.envId === state.selectedEnvId) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  // If no pre-selection, pick first
-  if (!state.selectedEnvId && envs.length > 0) {
+  if (!envs.some((e) => e.envId === state.selectedEnvId)) {
     state.selectedEnvId = envs[0].envId;
-    sel.value = state.selectedEnvId;
   }
+  const sel = envs.find((e) => e.envId === state.selectedEnvId) || state.selectedEnv;
+  if (sel) {
+    state.selectedEnv = sel;
+    input.value = envDisplayText(sel);
+  }
+  input.placeholder = 'Search by name, node id, or GPU (e.g. h200)…';
+  onEnvChange();
+}
+
+function requestEnvs(query) {
+  state.envQuery = query;
+  state.envSearching = true;
+  vscode.postMessage({ type: 'listEnvs', query });
+}
+
+function renderEnvResults() {
+  const list = document.getElementById('envResults');
+  list.innerHTML = '';
+  state.comboActiveIndex = -1;
+  if (state.envSearching) {
+    const el = document.createElement('div');
+    el.className = 'combo-empty';
+    el.textContent = 'Searching…';
+    list.appendChild(el);
+    list.style.display = '';
+    return;
+  }
+  if (!state.envs || state.envs.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'combo-empty';
+    empty.textContent = 'No matching environments';
+    list.appendChild(empty);
+  } else {
+    state.envs.forEach((env, i) => {
+      const sel = state.selectedEnv;
+      const active = sel && env.envId === sel.envId && env.nodeId === sel.nodeId;
+      const item = document.createElement('div');
+      item.className = 'combo-item' + (active ? ' active' : '');
+      item.setAttribute('role', 'option');
+      item.dataset.idx = String(i);
+      const title = document.createElement('div');
+      title.textContent = env.label + ' (' + shortNodeId(env.nodeId) + ')';
+      item.appendChild(title);
+      const summary = envResourceSummary(env);
+      if (summary) {
+        const sub = document.createElement('div');
+        sub.className = 'combo-sub';
+        sub.textContent = summary;
+        item.appendChild(sub);
+      }
+      item.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        selectEnv(env);
+      });
+      list.appendChild(item);
+    });
+  }
+  list.style.display = '';
+}
+
+function selectEnv(env) {
+  if (!env) return;
+  state.selectedEnv = env;
+  state.selectedEnvId = env.envId;
+  document.getElementById('envSearch').value = envDisplayText(env);
+  document.getElementById('envResults').style.display = 'none';
   onEnvChange();
 }
 
 function onEnvChange() {
-  const envId = document.getElementById('envSelect').value;
-  state.selectedEnvId = envId;
-  const env = state.envs.find((e) => e.envId === envId);
+  const env = state.selectedEnv;
 
   // Update token select
   const tokenRow = document.getElementById('tokenRow');
@@ -818,19 +921,25 @@ window.addEventListener('message', (event) => {
       if (state.envs.length > 0) populateEnvSelect(state.envs);
       return;
 
-    case 'envsLoaded':
+    case 'envsLoaded': {
+      if (!data.initial && typeof data.query === 'string' && data.query !== state.envQuery) return;
+      state.envSearching = false;
       state.envs = data.envs || [];
-      populateEnvSelect(state.envs);
+      if (data.initial) {
+        populateEnvSelect(state.envs);
+      } else if (document.getElementById('envResults').style.display !== 'none') {
+        renderEnvResults();
+      }
       return;
+    }
 
     case 'resourcesConsumed': {
-      // A job just started — bump inUse locally so sliders reflect reduced availability.
-      const env = state.envs.find((e) => e.envId === data.envId);
-      if (env && Array.isArray(env.resources)) {
+      const env = state.selectedEnv;
+      if (env && env.envId === data.envId && Array.isArray(env.resources)) {
         const byId = Object.fromEntries((data.consumed || []).map((c) => [c.id, c.amount]));
         env.resources = env.resources.map((r) =>
           byId[r.id] ? { ...r, inUse: (r.inUse || 0) + byId[r.id] } : r);
-        if (env.envId === state.selectedEnvId) applyEnvToSliders(env);
+        applyEnvToSliders(env);
       }
       return;
     }
@@ -875,7 +984,54 @@ window.addEventListener('message', (event) => {
 // ============================================================
 // DOM event wiring
 // ============================================================
-document.getElementById('envSelect').addEventListener('change', onEnvChange);
+const envSearch = document.getElementById('envSearch');
+let envDebounceTimer = null;
+envSearch.addEventListener('focus', () => { envSearch.select(); renderEnvResults(); });
+envSearch.addEventListener('input', () => {
+  state.envSearching = true;
+  renderEnvResults();
+  if (envDebounceTimer) clearTimeout(envDebounceTimer);
+  envDebounceTimer = setTimeout(() => requestEnvs(envSearch.value), 250);
+});
+envSearch.addEventListener('keydown', (e) => {
+  const list = document.getElementById('envResults');
+  const items = Array.from(list.querySelectorAll('.combo-item'));
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (list.style.display === 'none') { renderEnvResults(); return; }
+    state.comboActiveIndex = Math.min(state.comboActiveIndex + 1, items.length - 1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    state.comboActiveIndex = Math.max(state.comboActiveIndex - 1, 0);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const item = items[state.comboActiveIndex >= 0 ? state.comboActiveIndex : 0];
+    if (item) selectEnv(state.envs[Number(item.dataset.idx)]);
+    return;
+  } else if (e.key === 'Escape') {
+    list.style.display = 'none';
+    return;
+  } else {
+    return;
+  }
+  items.forEach((it, i) => it.classList.toggle('active', i === state.comboActiveIndex));
+  const active = items[state.comboActiveIndex];
+  if (active) active.scrollIntoView({ block: 'nearest' });
+});
+// On blur, restore the selected env's text (in case the user typed without
+// picking) and close the list.
+envSearch.addEventListener('blur', () => {
+  const env = state.selectedEnv;
+  if (env) envSearch.value = envDisplayText(env);
+  document.getElementById('envResults').style.display = 'none';
+});
+// Close the list on any click outside the combobox.
+document.addEventListener('mousedown', (e) => {
+  const combo = document.getElementById('envCombo');
+  if (combo && !combo.contains(e.target)) {
+    document.getElementById('envResults').style.display = 'none';
+  }
+});
 
 document.getElementById('tokenSelect').addEventListener('change', () => {
   state.selectedFeeToken = document.getElementById('tokenSelect').value;
@@ -906,7 +1062,7 @@ document.getElementById('mountStorageBtn').addEventListener('click', () => {
 });
 
 document.getElementById('addFundsBtn').addEventListener('click', () => {
-  const env = state.envs.find((e) => e.envId === state.selectedEnvId);
+  const env = state.selectedEnv;
   const nodeId = env ? env.nodeId : state.nodeId;
   if (nodeId) {
     vscode.postMessage({ type: 'openFunding', nodeId });
@@ -916,7 +1072,7 @@ document.getElementById('addFundsBtn').addEventListener('click', () => {
 });
 
 document.getElementById('viewNodeBtn').addEventListener('click', () => {
-  const env = state.envs.find((e) => e.envId === state.selectedEnvId);
+  const env = state.selectedEnv;
   const nodeId = env ? env.nodeId : state.nodeId;
   if (nodeId) {
     vscode.postMessage({ type: 'openNodeDashboard', nodeId });
@@ -955,17 +1111,12 @@ function buildSavePayload() {
 // ============================================================
 // Initial load
 // ============================================================
-async function loadEnvs() {
-  const sel = document.getElementById('envSelect');
-  sel.innerHTML = '<option value="">Loading…</option>';
-  try {
-    const res = await call('listEnvs');
-    state.envs = res.envs || [];
-    populateEnvSelect(state.envs);
-  } catch (e) {
-    showToast((e && e.message) || 'Failed to load environments', 'error');
-    sel.innerHTML = '<option value="">Failed to load</option>';
-  }
+function loadEnvs() {
+  const input = document.getElementById('envSearch');
+  input.placeholder = 'Loading environments…';
+  state.envQuery = '';
+  state.envSearching = false;
+  vscode.postMessage({ type: 'listEnvs', query: '', initial: true });
 }
 
 loadEnvs();

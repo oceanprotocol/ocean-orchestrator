@@ -117,7 +117,9 @@ async function pushEnvInfo() {
   let balance: number | null = null
   let available: { id: string; max: number; inUse?: number }[] = []
   try {
-    const env = (await fetchPaidEnvironments()).find((e) => e.envId === config.environmentId)
+    const env = (await fetchPaidEnvironments(config.environmentId, 5)).find(
+      (e) => e.envId === config.environmentId
+    )
     if (env) {
       available = (env.resources || []).map((r: any) => ({ id: r.id, max: r.max ?? r.maximum ?? r.total }))
       try {
@@ -1026,7 +1028,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Apply a paid-job selection from the Configure panel (shared by saveConfig
     // and runJob): resolve the env's node addr and update the live config.
     async function applyPaidConfigFromPanel(data: any) {
-      const envs = await fetchPaidEnvironments()
+      const envs = await fetchPaidEnvironments(data.envId, 5)
       const env = envs.find((e) => e.envId === data.envId)
       if (!env) {
         throw new Error('Selected environment is no longer available')
@@ -1049,27 +1051,34 @@ export async function activate(context: vscode.ExtensionContext) {
       try {
         switch (data.type) {
           case 'listEnvs': {
-            const envs = await fetchPaidEnvironments()
-            // One live fetch for the configured node enriches all its envs with inUse.
-            const anchorEnvId = config.environmentId ?? envs[0]?.envId
-            const anchorEnv = envs.find((e) => e.envId === anchorEnvId)
-            if (anchorEnv?.multiaddrs) {
-              try {
-                const liveEnvs = await getComputeEnvironments(anchorEnv.multiaddrs)
-                for (const env of envs) {
-                  if (env.multiaddrs?.[0] !== anchorEnv.multiaddrs[0]) continue
-                  const liveEnv = liveEnvs?.find((le: any) => le.id === env.envId)
-                  if (liveEnv?.resources) {
-                    env.resources = mergeLiveInUse(env.resources || [], liveEnv.resources)
+            const query = typeof data.query === 'string' ? data.query.trim() : ''
+            const initial = !!data.initial
+            const envs = await fetchPaidEnvironments(query || undefined, 50)
+            if (initial) {
+              if (config.environmentId && !envs.some((e) => e.envId === config.environmentId)) {
+                const [anchor] = await fetchPaidEnvironments(config.environmentId, 5)
+                if (anchor) envs.unshift(anchor)
+              }
+              const anchorEnvId = config.environmentId ?? envs[0]?.envId
+              const anchorEnv = envs.find((e) => e.envId === anchorEnvId)
+              if (anchorEnv?.multiaddrs) {
+                try {
+                  const liveEnvs = await getComputeEnvironments(anchorEnv.multiaddrs)
+                  for (const env of envs) {
+                    if (env.multiaddrs?.[0] !== anchorEnv.multiaddrs[0]) continue
+                    const liveEnv = liveEnvs?.find((le: any) => le.id === env.envId)
+                    if (liveEnv?.resources) {
+                      env.resources = mergeLiveInUse(env.resources || [], liveEnv.resources)
+                    }
                   }
-                }
-              } catch { /* fall back to incentive API data */ }
+                } catch { /* fall back to incentive API data */ }
+              }
             }
-            reply({ type: 'envsLoaded', requestId, envs })
+            reply({ type: 'envsLoaded', requestId, envs, query, initial })
             return
           }
           case 'estimateCost': {
-            const env = (await fetchPaidEnvironments()).find((e) => e.envId === data.envId)
+            const env = (await fetchPaidEnvironments(data.envId, 5)).find((e) => e.envId === data.envId)
             if (!env) {
               reply({ type: 'configureJobError', requestId, message: 'Environment not found' })
               return

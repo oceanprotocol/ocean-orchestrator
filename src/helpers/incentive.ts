@@ -40,7 +40,10 @@ function orderDialable(addrs: string[]): string[] {
   return [...addrs.filter(isWs), ...addrs.filter((a) => !isWs(a))]
 }
 
-export async function fetchPaidEnvironments(): Promise<EnvSummary[]> {
+export async function fetchPaidEnvironments(
+  search?: string,
+  size = 100
+): Promise<EnvSummary[]> {
   const filters = JSON.stringify({
     network: { operator: 'eq', value: String(BASE_CHAIN_ID) },
     feeToken: {
@@ -53,17 +56,18 @@ export async function fetchPaidEnvironments(): Promise<EnvSummary[]> {
   const params = new URLSearchParams({
     filters,
     page: '1',
-    pageSize: '50',
+    pageSize: String(size),
+    size: String(size),
     sort
   })
+  if (search) {
+    params.set('search', search)
+  }
 
-  const url = `${INCENTIVE_API_ROOT}/envs?${params.toString()}`
-  const resp = await globalThis.fetch(url)
-
+  const resp = await globalThis.fetch(`${INCENTIVE_API_ROOT}/envs?${params.toString()}`)
   if (!resp.ok) {
     throw new Error(`fetchPaidEnvironments: HTTP ${resp.status}`)
   }
-
   const data: { envs: NodeEnvironments[] } = await resp.json()
 
   const result: EnvSummary[] = []
