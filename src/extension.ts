@@ -40,7 +40,9 @@ import {
   identifyUser,
   trackEvent,
   trackP2PError,
-  shutdownAnalytics
+  trackComputeError,
+  shutdownAnalytics,
+  ComputeStage
 } from './helpers/analytics'
 import { randomUUID } from 'crypto'
 
@@ -349,6 +351,12 @@ export async function activate(context: vscode.ExtensionContext) {
           return
         }
 
+        // Tracks which stage of start-compute is active so the outer catch can
+        // attribute a failure correctly; and guards against double-counting a
+        // failure that is both tracked inline and re-thrown into the outer catch.
+        let stage: ComputeStage = 'auth_token'
+        let jobFailureTracked = false
+
         let signer: ethers.HDNodeWallet
         if (!authToken || authToken === '') {
           try {
@@ -369,6 +377,16 @@ export async function activate(context: vscode.ExtensionContext) {
           } catch (error) {
             console.log(error)
             trackP2PError(config.address || anonymousId, error, 'generateAuthToken')
+            // This runs before `compute_job_started`, so job_id is null and the
+            // wallet address may not be set yet — fall back to anonymousId.
+            trackComputeError(config.address || anonymousId, {
+              stage: 'auth_token',
+              error,
+              error_type: 'auth',
+              is_free_compute: config.isFreeCompute,
+              environment_id: config.environmentId,
+              job_id: null
+            })
             vscode.window.showErrorMessage(
               'Error generating auth token. Please make sure you selected a valid node'
             )
@@ -381,7 +399,7 @@ export async function activate(context: vscode.ExtensionContext) {
         pushStorageConfigSnapshot()
         provider.sendMessage({ type: 'jobLoading' })
 
-        trackEvent(config.address!, 'compute_job_started', {
+        trackEvent(config.address || anonymousId, 'compute_job_started', {
           is_free_compute: config.isFreeCompute,
           environment_id: config.environmentId,
           has_dataset: !!dataset,
@@ -401,6 +419,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // Initial setup
             progress.report({ message: 'Starting compute job...' })
 
+            stage = 'read_files'
             const algorithmContent = await fs.promises.readFile(algorithmPath, 'utf8')
 
             // Start compute job
@@ -440,6 +459,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const persistentAssets = await resolvePersistentMountAssets(progress)
             const outputBucketId = outputBucketRegistry.get(currentMountScope())
 
+            stage = 'order_start'
             const computeResponse = await computeStart(
               config,
               algorithmContent,
@@ -465,11 +485,13 @@ export async function activate(context: vscode.ExtensionContext) {
             // Save the job ID for future use
             savedJobId = jobId
 
-            trackEvent(config.address!, 'compute_job_created', {
+            trackEvent(config.address || anonymousId, 'compute_job_created', {
               is_free_compute: config.isFreeCompute,
               environment_id: config.environmentId,
               job_id: jobId
             })
+
+            stage = 'polling'
 
             // Notify webview that job started
             provider.sendMessage({
@@ -511,12 +533,15 @@ export async function activate(context: vscode.ExtensionContext) {
 
               if (status?.terminationDetails?.OOMKilled === true) {
                 const errorMessage = `Job failed: Out of memory. Exit code: ${status?.terminationDetails?.exitCode}`
-                trackEvent(config.address!, 'compute_job_failed', {
+                trackComputeError(config.address || anonymousId, {
+                  stage: 'polling',
+                  error: new Error('OOMKilled'),
+                  error_type: 'oom',
                   is_free_compute: config.isFreeCompute,
                   environment_id: config.environmentId,
-                  job_id: jobId,
-                  error: 'OOMKilled'
+                  job_id: jobId
                 })
+                jobFailureTracked = true
                 vscode.window.showErrorMessage(errorMessage)
                 computeLogsChannel.appendLine(errorMessage)
                 savedJobId = null
@@ -542,19 +567,27 @@ export async function activate(context: vscode.ExtensionContext) {
                   console.error('Error retrieving logs on failure:', retrievalError)
                 }
 
-                trackEvent(config.address!, 'compute_job_failed', {
+                trackComputeError(config.address || anonymousId, {
+                  stage: 'polling',
+                  error: new Error(status.statusText),
                   is_free_compute: config.isFreeCompute,
                   environment_id: config.environmentId,
-                  job_id: jobId,
-                  error: status.statusText
+                  job_id: jobId
                 })
+                jobFailureTracked = true
                 savedJobId = null
                 provider.sendMessage({ type: 'jobStopped' })
-                throw new Error(`Job failed with status: ${status.statusText}`)
+                // Return instead of throwing: the failure is already tracked and the
+                // webview notified, so re-entering the outer catch would double-count.
+                // Surface the error to the user here since we no longer reach the
+                // outer catch's showErrorMessage.
+                vscode.window.showErrorMessage(`Job failed with status: ${status.statusText}`)
+                return
               }
 
               if (status.dateFinished) {
                 try {
+                  stage = 'results'
                   console.log('Generating signature for request...')
                   progress.report({ message: 'Generating signature for request...' })
                   outputChannel.appendLine('Generating signature for request...')
@@ -581,7 +614,7 @@ export async function activate(context: vscode.ExtensionContext) {
                       filename: r.filename
                     }))
                   })
-                  trackEvent(config.address!, 'compute_job_completed', {
+                  trackEvent(config.address || anonymousId, 'compute_job_completed', {
                     is_free_compute: config.isFreeCompute,
                     environment_id: config.environmentId,
                     job_id: jobId
@@ -607,12 +640,18 @@ export async function activate(context: vscode.ExtensionContext) {
         } catch (error) {
           console.error('Error details:', error)
 
-          trackEvent(config.address!, 'compute_job_failed', {
-            is_free_compute: config.isFreeCompute,
-            environment_id: config.environmentId,
-            job_id: savedJobId,
-            error: error instanceof Error ? error.message : String(error)
-          })
+          // Only fire if an inline handler (OOM / status branch) hasn't already
+          // tracked this failure — avoids double-counting. `stage` attributes the
+          // failure to whichever step was active when the error was thrown.
+          if (!jobFailureTracked) {
+            trackComputeError(config.address || anonymousId, {
+              stage,
+              error,
+              is_free_compute: config.isFreeCompute,
+              environment_id: config.environmentId,
+              job_id: savedJobId
+            })
+          }
 
           // Reset job state and notify webview on error
           savedJobId = null
