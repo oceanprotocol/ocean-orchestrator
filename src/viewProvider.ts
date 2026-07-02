@@ -305,7 +305,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               await vscode.commands.executeCommand(
                 'ocean-protocol.downloadResults',
                 data.jobId,
-                data.outputsURL
+                data.outputsURL,
+                data.status
               )
               break
             case 'openStorage':
@@ -570,7 +571,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       display: flex;
       align-items: center;
       gap: var(--sp-2);
-      padding: var(--sp-1) var(--sp-2);
+      padding: 2px var(--sp-2);
       border-radius: var(--radius-sm);
       cursor: pointer;
       border-left: 3px solid transparent;
@@ -588,12 +589,54 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: var(--fs-xs);
+      font-size: var(--fs-sm);
     }
-    .job-time {
+    .job-when {
       font-size: var(--fs-xs);
       color: var(--vscode-descriptionForeground);
+      white-space: nowrap;
       flex-shrink: 0;
+    }
+    .job-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .job-icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--vscode-icon-foreground, var(--vscode-foreground));
+      cursor: pointer;
+      transition: background var(--transition), opacity var(--transition);
+    }
+    .job-icon-btn svg {
+      width: 15px;
+      height: 15px;
+      display: block;
+    }
+    .job-icon-btn:disabled {
+      opacity: 0.25;
+      cursor: default;
+    }
+    .job-icon-btn.download {
+      color: var(--vscode-textLink-foreground, var(--vscode-charts-blue));
+    }
+    .job-icon-btn.download:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--vscode-textLink-foreground, var(--vscode-charts-blue)) 18%, transparent);
+    }
+    .job-icon-btn.stop {
+      color: var(--vscode-errorForeground);
+    }
+    .job-icon-btn.stop:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--vscode-errorForeground) 18%, transparent);
     }
     .no-jobs {
       font-size: var(--fs-xs);
@@ -615,57 +658,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     .jobs-pager .btn:disabled {
       opacity: 0.4;
       cursor: default;
-    }
-
-    /* Download results: primary style, matching the Run button */
-    #downloadBtn {
-      width: 100%;
-      font-size: var(--fs-sm);
-      font-weight: 600;
-      padding: var(--sp-2) var(--sp-3);
-      border-radius: var(--radius-sm);
-      border: 1px solid transparent;
-      cursor: pointer;
-      font-family: inherit;
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      transition: background var(--transition), opacity var(--transition);
-    }
-    #downloadBtn:hover:not(:disabled) {
-      background: var(--vscode-button-hoverBackground);
-    }
-    #downloadBtn:disabled {
-      opacity: 0.45;
-      cursor: default;
-    }
-
-    /* Job action buttons (under run button) */
-    #jobActions {
-      display: flex;
-      flex-direction: column;
-      gap: var(--sp-1);
-      margin-top: calc(-1 * var(--sp-3));
-      margin-bottom: var(--sp-3);
-    }
-    .job-act-btn {
-      width: 100%;
-      font-size: var(--fs-xs);
-      padding: var(--sp-1) var(--sp-2);
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--vscode-panel-border);
-      cursor: pointer;
-      font-family: inherit;
-      background: transparent;
-      color: var(--vscode-foreground);
-      text-align: left;
-      transition: background var(--transition), opacity var(--transition);
-    }
-    .job-act-btn:hover:not(:disabled) {
-      background: var(--vscode-list-hoverBackground);
-    }
-    .job-act-btn:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
     }
 
     /* Footer links */
@@ -790,11 +782,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   <button id="runBtn" disabled>&#9654; Run free test job</button>
   <div id="elapsedTimer">0:00 elapsed</div>
 
-  <!-- JOB ACTION BUTTONS (operate on selected job) -->
-  <div id="jobActions">
-    <button id="downloadBtn" disabled>Download results</button>
-  </div>
-
   <!-- JOBS -->
   <div class="section-gap section-sep">
     <span class="label-section">Jobs</span>
@@ -812,6 +799,11 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
   <script>
     const vscode = acquireVsCodeApi();
     const defaultMultiaddr = "${defaultMultiaddrEscaped}";
+
+    // Inline SVGs for per-row job actions — crisp at any zoom, theme-colored via
+    // currentColor, and independent of glyph-font availability.
+    const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7.5 11.5 12 16l4.5-4.5"/><path d="M5 20h14"/></svg>';
+    const ICON_STOP = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 
     // -------------------------------------------------------------------------
     // State
@@ -868,7 +860,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     const runBtn = document.getElementById('runBtn');
     const elapsedTimerEl = document.getElementById('elapsedTimer');
     const jobsListEl = document.getElementById('jobsList');
-    const downloadBtn = document.getElementById('downloadBtn');
     const connectLink = document.getElementById('connectLink');
     const storageLink = document.getElementById('storageLink');
 
@@ -893,11 +884,13 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       return id.length > 24 ? id.slice(0, 10) + '…' + id.slice(-6) : id;
     }
 
-    function fmtTime(ts) {
+    function fmtDateTime(ts) {
       const ms = toMs(ts);
       if (!ms) return '';
       const d = new Date(ms);
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return date + ' \\u00B7 ' + time;
     }
 
     // Resource id -> kind. GPU resource ids are model/uuid strings, so anything
@@ -1217,30 +1210,14 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       return j && jobEffStatus(j) === 'Running' ? j : null;
     }
 
-    function renderJobActions() {
-      const selectedJob = selectedJobId ? jobs.find((j) => j.jobId === selectedJobId) : null;
-      const effStatus = selectedJob ? jobEffStatus(selectedJob) : null;
-
-      // Download: enabled only when the selected job is Completed or has outputsURL.
-      const canDownload = selectedJob && (effStatus === 'Completed' || !!selectedJob.outputsURL);
-      downloadBtn.disabled = !canDownload;
-    }
-
     function renderRunBtn() {
       const hasProject = !!projectPath;
-      if (selectedLiveJob()) {
-        // The selected job is running — the primary button stops that job, in place.
-        runBtn.textContent = '\\u25A0 Stop job';
-        runBtn.classList.add('btn-danger');
-        runBtn.disabled = false;
-      } else {
-        runBtn.classList.remove('btn-danger');
-        runBtn.textContent =
-          mode === 'connected-paid'
-            ? (connectedFree ? '\\u25BA Run free job' : '\\u25BA Run job')
-            : '\\u25BA Run free test job';
-        runBtn.disabled = !hasProject;
-      }
+      runBtn.classList.remove('btn-danger');
+      runBtn.textContent =
+        mode === 'connected-paid'
+          ? (connectedFree ? '\\u25BA Run free job' : '\\u25BA Run job')
+          : '\\u25BA Run free test job';
+      runBtn.disabled = !hasProject;
     }
 
     // Elapsed time for the SELECTED running job, derived from its createdAt (the
@@ -1282,13 +1259,23 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         const shortName = j.name && j.name !== j.jobId
           ? j.name
           : j.jobId.slice(0, 8) + '…';
-        const timeStr = fmtTime(j.finishedAt || j.createdAt);
+        const timeStr = fmtDateTime(j.finishedAt || j.createdAt);
+        const jid = escapeHtml(j.jobId);
+        const canDownload = status === 'Completed' || status === 'Failed' || !!j.outputsURL;
+        const dlLabel = status === 'Failed' ? 'Download logs' : 'Download results';
+        const downloadBtn =
+          '<button class="job-icon-btn download" data-act="download" data-id="' + jid + '"' +
+          (canDownload ? '' : ' disabled') +
+          ' aria-label="' + dlLabel + '" title="' + dlLabel + '">' + ICON_DOWNLOAD + '</button>';
+        const stopBtn = status === 'Running'
+          ? '<button class="job-icon-btn stop" data-act="stop" data-id="' + jid + '" aria-label="Stop job" title="Stop job">' + ICON_STOP + '</button>'
+          : '';
         return (
-          '<div class="job-row' + sel + '" data-id="' + escapeHtml(j.jobId) + '">' +
+          '<div class="job-row' + sel + '" data-id="' + jid + '">' +
           '<span class="status-dot ' + sc + '"></span>' +
           '<span class="job-name" title="' + escapeHtml(j.name || j.jobId) + '">' + escapeHtml(shortName) + '</span>' +
-          '<span class="status-badge ' + sc + '">' + escapeHtml(status) + '</span>' +
-          '<span class="job-time">' + timeStr + '</span>' +
+          '<span class="job-when">' + timeStr + '</span>' +
+          '<span class="job-actions">' + downloadBtn + stopBtn + '</span>' +
           '</div>'
         );
       }).join('');
@@ -1308,12 +1295,31 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         el.addEventListener('click', () => {
           const id = el.getAttribute('data-id');
           selectedJobId = id;
-          renderJobActions();
           renderRunBtn();
           renderTimer();
           renderJobs();
           vscode.postMessage({ type: 'selectJob', jobId: id });
           vscode.postMessage({ type: 'viewJobLogs', jobId: id });
+        });
+      });
+
+      // Per-row action icons act on their own job without selecting the row.
+      jobsListEl.querySelectorAll('.job-icon-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (btn.disabled) return;
+          const id = btn.getAttribute('data-id');
+          if (btn.getAttribute('data-act') === 'stop') {
+            vscode.postMessage({ type: 'stopJob', jobId: id });
+          } else {
+            const job = jobs.find((j) => j.jobId === id);
+            vscode.postMessage({
+              type: 'downloadResults',
+              jobId: id,
+              outputsURL: job?.outputsURL || undefined,
+              status: job ? jobEffStatus(job) : undefined
+            });
+          }
         });
       });
       const prevBtn = document.getElementById('jobsPrevBtn');
@@ -1340,7 +1346,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       renderProject();
       renderDockerFields();
       renderEnvCard();
-      renderJobActions();
       renderRunBtn();
       renderTimer();
       renderJobs();
@@ -1369,11 +1374,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     });
 
     runBtn.addEventListener('click', () => {
-      const live = selectedLiveJob();
-      if (live) {
-        vscode.postMessage({ type: 'stopJob', jobId: live.jobId });
-        return;
-      }
       const showDocker = projectType === DOCKER_PROJECT_TYPE;
       const runMsg = {
         type: mode === 'connected-paid' ? 'runJob' : 'runFreeJob',
@@ -1382,16 +1382,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
         dockerTag: showDocker ? (dockerTagInput.value.trim() || undefined) : undefined
       };
       vscode.postMessage(runMsg);
-    });
-
-    downloadBtn.addEventListener('click', () => {
-      if (!selectedJobId) return;
-      const selectedJob = jobs.find((j) => j.jobId === selectedJobId);
-      vscode.postMessage({
-        type: 'downloadResults',
-        jobId: selectedJobId,
-        outputsURL: selectedJob?.outputsURL || undefined
-      });
     });
 
     connectLink.addEventListener('click', (e) => {
@@ -1503,7 +1493,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           if (mode === 'connected-paid' && refreshInFlight) {
             setRefreshInFlight(false);
           }
-          renderJobActions();
           renderRunBtn();
           renderTimer();
           renderJobs();
@@ -1539,7 +1528,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           renderStatus();
           renderRunBtn();
           renderTimer();
-          renderJobActions();
           // Refresh job list
           vscode.postMessage({ type: 'getJobs' });
           break;
@@ -1549,7 +1537,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           renderStatus();
           renderRunBtn();
           renderTimer();
-          renderJobActions();
           // Refresh job list
           vscode.postMessage({ type: 'getJobs' });
           break;

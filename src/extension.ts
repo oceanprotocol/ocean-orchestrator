@@ -86,6 +86,10 @@ let provider: OceanProtocolViewProvider
 let anonymousId: string
 let globalContext: vscode.ExtensionContext | undefined
 
+function nodeConfig(nodeUri: string | undefined, authToken: string | undefined): SelectedConfig {
+  return new SelectedConfig({ multiaddresses: nodeUri ? [nodeUri] : undefined, authToken })
+}
+
 let selectedProject: { algorithmPath: string; resultsFolderPath: string } | undefined
 let pendingJobName: string | undefined
 let lastEstimatedCost: number | undefined
@@ -453,6 +457,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         console.log('Progress options:', progressOptions)
 
+        let startedJobId: string | null = null
         try {
           await vscode.window.withProgress(progressOptions, async (progress) => {
             progress.report({ message: 'Starting compute job...' })
@@ -527,6 +532,8 @@ export async function activate(context: vscode.ExtensionContext) {
               )
             }
             savedJobId = jobId
+            startedJobId = jobId
+            const jobConfig = nodeConfig(config.multiaddresses?.[0], config.authToken)
 
             if (pendingJobName) {
               const envLabel = config.environmentId ?? 'unknown'
@@ -577,7 +584,7 @@ export async function activate(context: vscode.ExtensionContext) {
             while (true) {
               console.log('Checking job status...')
               const status = await withRetrial(
-                () => checkComputeStatus(config, jobId),
+                () => checkComputeStatus(jobConfig, jobId),
                 progress
               )
               console.log('Job status:', status)
@@ -592,7 +599,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
               if (status.statusText.includes('Running algorithm') && !logStreamStarted) {
                 logStreamStarted = true
-                getComputeLogs(config, jobId, outputChannel)
+                getComputeLogs(jobConfig, jobId, outputChannel)
                   .catch((err) => console.log('Log stream disconnected', err))
                   .finally(() => {
                     logStreamStarted = false
@@ -610,7 +617,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 vscode.window.showErrorMessage(errorMessage)
                 outputChannel.appendLine(errorMessage)
                 await updateLocalJobStatus(context, jobId, 'Failed')
-                savedJobId = null
+                if (savedJobId === jobId) {
+                  savedJobId = null
+                }
                 provider.sendMessage({ type: 'jobStopped' })
                 onJobLifecycleEvent?.().catch(() => {})
 
@@ -622,13 +631,15 @@ export async function activate(context: vscode.ExtensionContext) {
                 status.statusText.toLowerCase().includes('failed')
               ) {
                 try {
+                  const rec = getLocalJobs(context).find((j) => j.jobId === jobId)
                   await handleFailureLogsRetrieval(
-                    config,
+                    jobConfig,
                     jobId,
                     status,
                     resultsFolderPath,
                     outputChannel,
-                    progress
+                    progress,
+                    jobResultsFolderName(rec?.name, rec?.createdAt, jobId)
                   )
                 } catch (retrievalError) {
                   console.error('Error retrieving logs on failure:', retrievalError)
@@ -641,7 +652,9 @@ export async function activate(context: vscode.ExtensionContext) {
                   error: status.statusText
                 })
                 await updateLocalJobStatus(context, jobId, 'Failed')
-                savedJobId = null
+                if (savedJobId === jobId) {
+                  savedJobId = null
+                }
                 provider.sendMessage({ type: 'jobStopped' })
                 throw new Error(`Job failed with status: ${status.statusText}`)
               }
@@ -676,7 +689,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     environment_id: config.environmentId,
                     job_id: jobId
                   })
-                  savedJobId = null
+                  if (savedJobId === jobId) {
+                    savedJobId = null
+                  }
                   await updateLocalJobStatus(context, jobId, 'Completed')
                   provider.sendMessage({ type: 'jobCompleted', jobId })
                   onJobLifecycleEvent?.().catch(() => {})
@@ -702,14 +717,15 @@ export async function activate(context: vscode.ExtensionContext) {
           trackEvent(config.address!, 'compute_job_failed', {
             is_free_compute: config.isFreeCompute,
             environment_id: config.environmentId,
-            job_id: savedJobId,
+            job_id: startedJobId,
             error: error instanceof Error ? error.message : String(error)
           })
 
-          const failedId = savedJobId
-          savedJobId = null
-          if (failedId) {
-            await updateLocalJobStatus(context, failedId, 'Failed')
+          if (startedJobId) {
+            await updateLocalJobStatus(context, startedJobId, 'Failed')
+          }
+          if (savedJobId === startedJobId) {
+            savedJobId = null
           }
           provider.sendMessage({ type: 'jobStopped' })
           onJobLifecycleEvent?.().catch(() => {})
@@ -724,12 +740,172 @@ export async function activate(context: vscode.ExtensionContext) {
     )
     context.subscriptions.push(startComputeJob)
 
+    function jobProbe(
+      jobId: string
+    ): { probe: SelectedConfig; name?: string; createdAt?: number } | null {
+      const localJob = getLocalJobs(context).find((j) => j.jobId === jobId)
+      const nodeUri = localJob?.nodeUri ?? config.multiaddresses?.[0]
+      if (!nodeUri) {
+        return null
+      }
+      const probe = nodeConfig(nodeUri, localJob?.authToken ?? config.authToken)
+      return { probe, name: localJob?.name, createdAt: localJob?.createdAt }
+    }
+
+    async function downloadJobLogs(jobId: string) {
+      const jp = jobProbe(jobId)
+      const resultsFolderPath = selectedProject?.resultsFolderPath
+      if (!jp || !resultsFolderPath) {
+        vscode.window.showErrorMessage(
+          jp ? 'Open a project folder to download logs into.' : 'No node address available to download logs.'
+        )
+        return
+      }
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Downloading Logs', cancellable: false },
+        async (progress) => {
+          const status = await checkComputeStatus(jp.probe, jobId)
+          const hasLogs = (status?.results ?? []).some((r: any) => !r.filename?.includes('.tar'))
+          const folderName = jobResultsFolderName(jp.name, jp.createdAt, jobId)
+          await handleFailureLogsRetrieval(
+            jp.probe, jobId, status, resultsFolderPath, outputChannel, progress, folderName
+          )
+          vscode.window.showInformationMessage(
+            hasLogs ? 'Logs saved to results folder.' : 'No logs available for this job.'
+          )
+        }
+      )
+    }
+
+    async function saveJobResults(
+      probe: SelectedConfig,
+      jobId: string,
+      folderName: string,
+      resultsFolderPath: string,
+      archiveIndex: number | null,
+      archiveSize: number,
+      logResults: Array<{ index: number; filename: string }>
+    ) {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Downloading Results',
+          cancellable: true
+        },
+        async (progress, token) => {
+          const abortController = new AbortController()
+          token.onCancellationRequested(() => abortController.abort())
+
+          progress.report({ message: '0%' })
+          let lastIncrement = 0
+          const onDownloadProgress =
+            archiveSize > 0
+              ? (bytesWritten: number, totalBytes: number) => {
+                  const pct = Math.min(100, Math.floor((bytesWritten / totalBytes) * 100))
+                  progress.report({ message: `${pct}%`, increment: pct - lastIncrement })
+                  lastIncrement = pct
+                }
+              : undefined
+          try {
+            const hasArchive = archiveIndex != null
+            const totalFiles = logResults.length + (hasArchive ? 1 : 0)
+            let filesDone = 0
+
+            for (const log of logResults) {
+              if (abortController.signal.aborted) break
+              progress.report({ message: `Logs (${++filesDone}/${totalFiles})...` })
+              await getAndSaveLogs(
+                probe,
+                jobId,
+                log.index,
+                log.filename,
+                resultsFolderPath,
+                undefined,
+                folderName
+              )
+            }
+
+            if (!abortController.signal.aborted) {
+              if (archiveIndex != null) {
+                const filePath = await saveOutput(
+                  probe,
+                  jobId,
+                  archiveIndex,
+                  resultsFolderPath,
+                  'result-output',
+                  onDownloadProgress,
+                  archiveSize > 0 ? archiveSize : undefined,
+                  abortController.signal,
+                  folderName
+                )
+                outputChannel.appendLine(`Results saved to: ${filePath}`)
+                vscode.window.showInformationMessage('Outputs available in results folder.')
+              } else {
+                outputChannel.appendLine(
+                  'Results were written to the output bucket. Open Persistent Storage to view them.'
+                )
+                vscode.window.showInformationMessage(
+                  'Results are in the output bucket — open Persistent Storage to view them.'
+                )
+              }
+            }
+          } catch (error) {
+            if (abortController.signal.aborted) {
+              outputChannel.appendLine('Download cancelled.')
+            } else {
+              throw error
+            }
+          }
+        }
+      )
+    }
+
+    async function downloadJobResultsOnDemand(jobId: string): Promise<boolean> {
+      const jp = jobProbe(jobId)
+      const resultsFolderPath = selectedProject?.resultsFolderPath
+      if (!jp || !resultsFolderPath) {
+        return false
+      }
+      let results: any[] = []
+      try {
+        const status = await checkComputeStatus(jp.probe, jobId)
+        results = status?.results ?? []
+      } catch (e) {
+        outputChannel.appendLine(`Could not fetch results for ${jobId}: ${e}`)
+        return false
+      }
+      if (results.length === 0) {
+        return false
+      }
+      const archive = results.find((r: any) => r.filename?.includes('.tar'))
+      const logResults = results
+        .filter((r: any) => !r.filename?.includes('.tar'))
+        .map((r: any) => ({ index: r.index, filename: r.filename }))
+      await saveJobResults(
+        jp.probe,
+        jobId,
+        jobResultsFolderName(jp.name, jp.createdAt, jobId),
+        resultsFolderPath,
+        archive ? archive.index : null,
+        archive?.filesize ?? 0,
+        logResults
+      )
+      return true
+    }
+
     context.subscriptions.push(
       vscode.commands.registerCommand(
         'ocean-protocol.downloadResults',
-        async (jobId: string, outputsURL?: string) => {
+        async (jobId: string, outputsURL?: string, status?: string) => {
           const job = completedJobs.get(jobId)
           if (!job) {
+            if (status === 'Failed') {
+              await downloadJobLogs(jobId)
+              return
+            }
+            if (await downloadJobResultsOnDemand(jobId)) {
+              return
+            }
             if (outputsURL) {
               let parsed: vscode.Uri | undefined
               try {
@@ -747,93 +923,15 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             return
           }
-          // Save under a "<job name>_<date>_<time>" folder instead of the raw
-          // jobId. Date comes from the job record so re-downloads reuse it.
-          const jobRecord = getLocalJobs(context).find((j) => j.jobId === jobId)
-          const folderName = jobResultsFolderName(
-            jobRecord?.name,
-            jobRecord?.createdAt,
-            jobId
-          )
-          await vscode.window.withProgress(
-            {
-              location: vscode.ProgressLocation.Notification,
-              title: 'Downloading Results',
-              cancellable: true
-            },
-            async (progress, token) => {
-              const abortController = new AbortController()
-              token.onCancellationRequested(() => abortController.abort())
-
-              progress.report({ message: '0%' })
-              let lastIncrement = 0
-              const onDownloadProgress =
-                job.archiveSize > 0
-                  ? (bytesWritten: number, totalBytes: number) => {
-                      const pct = Math.min(
-                        100,
-                        Math.floor((bytesWritten / totalBytes) * 100)
-                      )
-                      progress.report({
-                        message: `${pct}%`,
-                        increment: pct - lastIncrement
-                      })
-                      lastIncrement = pct
-                    }
-                  : undefined
-              try {
-                const hasArchive = job.archiveIndex != null
-                const totalFiles = job.logResults.length + (hasArchive ? 1 : 0)
-                let filesDone = 0
-
-                for (const log of job.logResults) {
-                  if (abortController.signal.aborted) break
-                  progress.report({ message: `Logs (${++filesDone}/${totalFiles})...` })
-                  await getAndSaveLogs(
-                    config,
-                    jobId,
-                    log.index,
-                    log.filename,
-                    job.resultsFolderPath,
-                    undefined,
-                    folderName
-                  )
-                }
-
-                if (!abortController.signal.aborted) {
-                  if (job.archiveIndex != null) {
-                    const filePath = await saveOutput(
-                      config,
-                      jobId,
-                      job.archiveIndex,
-                      job.resultsFolderPath,
-                      'result-output',
-                      onDownloadProgress,
-                      job.archiveSize > 0 ? job.archiveSize : undefined,
-                      abortController.signal,
-                      folderName
-                    )
-                    outputChannel.appendLine(`Results saved to: ${filePath}`)
-                    vscode.window.showInformationMessage(
-                      'Outputs available in results folder.'
-                    )
-                  } else {
-                    outputChannel.appendLine(
-                      'Results were written to the output bucket. Open Persistent Storage to view them.'
-                    )
-                    vscode.window.showInformationMessage(
-                      'Results are in the output bucket — open Persistent Storage to view them.'
-                    )
-                  }
-                }
-              } catch (error) {
-                if (abortController.signal.aborted) {
-                  outputChannel.appendLine('Download cancelled.')
-                } else {
-                  throw error
-                }
-              }
-            }
+          const jp = jobProbe(jobId)
+          await saveJobResults(
+            jp?.probe ?? config,
+            jobId,
+            jobResultsFolderName(jp?.name, jp?.createdAt, jobId),
+            job.resultsFolderPath,
+            job.archiveIndex,
+            job.archiveSize,
+            job.logResults
           )
         }
       )
@@ -1261,10 +1359,7 @@ export async function activate(context: vscode.ExtensionContext) {
             continue
           }
           try {
-            const probe = new SelectedConfig({
-              multiaddresses: [nodeUri],
-              authToken: job.authToken ?? config.authToken
-            })
+            const probe = nodeConfig(nodeUri, job.authToken ?? config.authToken)
             const st = await checkComputeStatus(probe, job.jobId)
             // Ocean C2D status codes: <10 = queued (0 started, 1 queued),
             // >=70 = finished, in between = actively running (pulling/building/
@@ -1461,19 +1556,14 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.commands.registerCommand('ocean-protocol.viewJobLogs', async (jobId: string) => {
         try {
-          const localJobs = getLocalJobs(context)
-          const localJob = localJobs.find((j) => j.jobId === jobId)
-          const nodeUri = localJob?.nodeUri ?? config.multiaddresses?.[0]
-          if (!nodeUri) {
+          const jp = jobProbe(jobId)
+          if (!jp) {
             outputChannel.appendLine(`Could not load logs for ${jobId}: no node address available`)
             outputChannel.show()
             return
           }
-          const probe = new SelectedConfig({
-            multiaddresses: [nodeUri],
-            authToken: localJob?.authToken ?? config.authToken
-          })
-          const label = localJob?.name ?? jobId
+          const { probe, name } = jp
+          const label = name ?? jobId
           outputChannel.clear()
           outputChannel.appendLine(`--- Logs · ${label} ---`)
           outputChannel.appendLine('Loading logs…')
@@ -1605,7 +1695,8 @@ async function handleFailureLogsRetrieval(
   status: any,
   resultsFolderPath: string,
   computeLogsChannel: vscode.OutputChannel,
-  progress: vscode.Progress<{ message?: string }>
+  progress: vscode.Progress<{ message?: string }>,
+  folderName?: string
 ) {
   if (!status.results || status.results.length === 0) {
     return
@@ -1624,7 +1715,8 @@ async function handleFailureLogsRetrieval(
         result.index,
         result.filename,
         resultsFolderPath,
-        progress
+        progress,
+        folderName
       )
 
       const logContent = await fs.promises.readFile(filePathLogs, 'utf-8')
