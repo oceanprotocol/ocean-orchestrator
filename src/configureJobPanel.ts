@@ -141,6 +141,14 @@ body {
   justify-content: space-between;
 }
 
+.resources-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
 /* Slider grid: label | slider | value */
 .slider-grid {
   display: grid;
@@ -420,6 +428,9 @@ body {
           <span class="gpu-label">GPU</span>
           <div class="gpu-checks" id="gpuChecks"></div>
         </div>
+      </div>
+      <div class="resources-footer">
+        <button class="btn btn-ghost btn-sm" id="manageStorageBtn">Manage storage ↗</button>
       </div>
     </div>
 
@@ -1201,6 +1212,10 @@ document.getElementById('datasetInput').addEventListener('input', (e) => {
 
 document.getElementById('mountStorageBtn').addEventListener('click', () => {
   vscode.postMessage({ type: 'mountFromStorage' });
+});
+
+document.getElementById('manageStorageBtn').addEventListener('click', () => {
+  vscode.postMessage({ type: 'openStorage' });
 });
 
 document.getElementById('addFundsBtn').addEventListener('click', () => {

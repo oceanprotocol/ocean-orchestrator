@@ -1265,7 +1265,8 @@ export async function activate(context: vscode.ExtensionContext) {
             reply({ type: 'nodeDashboardOpened', requestId })
             return
           }
-          case 'mountFromStorage': {
+          case 'mountFromStorage':
+          case 'openStorage': {
             vscode.commands.executeCommand('ocean-protocol.openStoragePanel')
             reply({ type: 'storageOpened', requestId })
             return

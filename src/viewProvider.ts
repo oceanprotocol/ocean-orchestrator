@@ -309,9 +309,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 data.status
               )
               break
-            case 'openStorage':
-              await vscode.commands.executeCommand('ocean-protocol.openStoragePanel')
-              break
             case 'connect':
               await vscode.commands.executeCommand('ocean-protocol.openConnectUrl')
               break
@@ -413,6 +410,35 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    /* Connect CTA */
+    .connect-cta {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      box-sizing: border-box;
+      width: 100%;
+      margin-bottom: var(--sp-3);
+      padding: var(--sp-1) var(--sp-2);
+      font-size: var(--fs-xs);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--vscode-panel-border);
+      color: var(--vscode-foreground);
+      background: transparent;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background var(--transition), border-color var(--transition);
+    }
+    .connect-cta:hover {
+      background: var(--vscode-list-hoverBackground);
+      border-color: var(--vscode-focusBorder);
+      text-decoration: none;
+    }
+    .connect-cta-arrow {
+      margin-left: auto;
+      flex-shrink: 0;
+      color: var(--vscode-descriptionForeground);
     }
     #refreshBtn {
       flex-shrink: 0;
@@ -622,15 +648,12 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       height: 15px;
       display: block;
     }
+    .job-icon-btn:hover:not(:disabled) {
+      background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+    }
     .job-icon-btn:disabled {
       opacity: 0.25;
       cursor: default;
-    }
-    .job-icon-btn.download {
-      color: var(--vscode-textLink-foreground, var(--vscode-charts-blue));
-    }
-    .job-icon-btn.download:hover:not(:disabled) {
-      background: color-mix(in srgb, var(--vscode-textLink-foreground, var(--vscode-charts-blue)) 18%, transparent);
     }
     .job-icon-btn.stop {
       color: var(--vscode-errorForeground);
@@ -649,7 +672,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       align-items: center;
       justify-content: space-between;
       gap: var(--sp-2);
-      margin-top: var(--sp-1);
+      margin-top: var(--sp-3);
     }
     .jobs-pager-info {
       font-size: var(--fs-xs);
@@ -658,22 +681,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     .jobs-pager .btn:disabled {
       opacity: 0.4;
       cursor: default;
-    }
-
-    /* Footer links */
-    .footer-links {
-      display: flex;
-      flex-direction: column;
-      gap: var(--sp-1);
-      margin-top: var(--sp-3);
-    }
-    .footer-links a {
-      font-size: var(--fs-xs);
-      color: var(--vscode-textLink-foreground);
-      text-decoration: none;
-    }
-    .footer-links a:hover {
-      text-decoration: underline;
     }
 
     .section-sep {
@@ -735,6 +742,12 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     <button id="refreshBtn" title="Refresh">&#8635;</button>
   </div>
 
+  <!-- CONNECT CTA (default-free mode only) -->
+  <a href="#" id="connectLink" class="connect-cta" style="display:none;">
+    <span>Connect wallet for paid environments</span>
+    <span class="connect-cta-arrow">&#8599;</span>
+  </a>
+
   <!-- PROJECT -->
   <div class="section-gap section-sep">
     <span class="label-section">Project</span>
@@ -790,11 +803,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
-  <!-- FOOTER LINKS -->
-  <div class="footer-links">
-    <a href="#" id="connectLink" style="display:none;">Connect for paid environments &#8599;</a>
-    <a href="#" id="storageLink">Manage storage &#8599;</a>
-  </div>
 
   <script>
     const vscode = acquireVsCodeApi();
@@ -861,7 +869,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     const elapsedTimerEl = document.getElementById('elapsedTimer');
     const jobsListEl = document.getElementById('jobsList');
     const connectLink = document.getElementById('connectLink');
-    const storageLink = document.getElementById('storageLink');
 
     // -------------------------------------------------------------------------
     // Helpers
@@ -1024,7 +1031,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'connected':
           statusDot.className = 'status-dot completed'; // green
-          statusText.textContent = 'Connected';
+          statusText.textContent = 'Node connected';
           break;
         case 'failed':
           statusDot.className = 'status-dot failed'; // red
@@ -1337,7 +1344,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     }
 
     function renderFooter() {
-      connectLink.style.display = mode === 'default-free' ? 'block' : 'none';
+      connectLink.style.display = mode === 'default-free' ? 'flex' : 'none';
     }
 
     function renderAll() {
@@ -1387,11 +1394,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     connectLink.addEventListener('click', (e) => {
       e.preventDefault();
       vscode.postMessage({ type: 'connect' });
-    });
-
-    storageLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      vscode.postMessage({ type: 'openStorage' });
     });
 
     // -------------------------------------------------------------------------
