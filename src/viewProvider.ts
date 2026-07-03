@@ -46,13 +46,18 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
     // does not mean "paid" — only treat it as paid when not free compute.
     const hasAuth = !!config.authToken
     const paidConnected = hasAuth && config.isFreeCompute !== true
-    const mode: 'default-free' | 'connected-paid' = paidConnected ? 'connected-paid' : 'default-free'
+    const mode: 'default-free' | 'connected-paid' = paidConnected
+      ? 'connected-paid'
+      : 'default-free'
 
     let nodeId: string | undefined
     if (config.environmentId) {
       const id = config.environmentId
       nodeId = id.length > 16 ? id.slice(0, 8) + '…' + id.slice(-6) : id
-    } else if (config.multiaddresses?.[0] && config.multiaddresses[0] !== DEFAULT_MULTIADDR) {
+    } else if (
+      config.multiaddresses?.[0] &&
+      config.multiaddresses[0] !== DEFAULT_MULTIADDR
+    ) {
       const addr = config.multiaddresses[0]
       const parts = addr.split('/')
       const peerId = parts[parts.length - 1]
@@ -61,13 +66,20 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
 
     const envId = config.environmentId
     const envShort = envId
-      ? (envId.length > 14 ? envId.slice(0, 8) + '…' + envId.slice(-6) : envId)
+      ? envId.length > 14
+        ? envId.slice(0, 8) + '…' + envId.slice(-6)
+        : envId
       : undefined
 
     return {
       type: 'stateUpdate',
       mode,
-      status: { connected: hasAuth, nodeId, address: config.address, isFree: config.isFreeCompute },
+      status: {
+        connected: hasAuth,
+        nodeId,
+        address: config.address,
+        isFree: config.isFreeCompute
+      },
       jobSummary: {
         envId,
         envShort,
@@ -166,8 +178,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                     'revealInExplorer',
                     vscode.Uri.file(algorithmPath)
                   )
-                } catch {
-                }
+                } catch {}
 
                 await vscode.commands.executeCommand(
                   'ocean-protocol.setSelectedProject',
@@ -243,15 +254,17 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                       await this.closeOldProjectTabs()
                       await this.openProjectFiles(projectPath)
 
-                      const algorithmPath = path.join(projectPath, templates.algorithmFileName)
+                      const algorithmPath = path.join(
+                        projectPath,
+                        templates.algorithmFileName
+                      )
 
                       try {
                         await vscode.commands.executeCommand(
                           'revealInExplorer',
                           vscode.Uri.file(algorithmPath)
                         )
-                      } catch {
-                      }
+                      } catch {}
 
                       await vscode.commands.executeCommand(
                         'ocean-protocol.setSelectedProject',
@@ -319,7 +332,10 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               await vscode.commands.executeCommand('ocean-protocol.showLogs')
               break
             case 'viewJobLogs':
-              await vscode.commands.executeCommand('ocean-protocol.viewJobLogs', data.jobId)
+              await vscode.commands.executeCommand(
+                'ocean-protocol.viewJobLogs',
+                data.jobId
+              )
               break
             case 'openExternalUrl': {
               let parsed: vscode.Uri | undefined
@@ -744,7 +760,7 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
 
   <!-- CONNECT CTA (default-free mode only) -->
   <a href="#" id="connectLink" class="connect-cta" style="display:none;">
-    <span>Connect wallet for paid environments</span>
+    <span>Connect for paid environments</span>
     <span class="connect-cta-arrow">&#8599;</span>
   </a>
 
