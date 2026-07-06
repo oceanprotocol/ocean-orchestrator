@@ -895,8 +895,6 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
       return m + ':' + s;
     }
 
-    // Local jobs store createdAt in ms (Date.now()); incentive jobs use epoch
-    // seconds. Normalize everything to ms so formatting + sorting are consistent.
     function toMs(ts) {
       if (!ts || isNaN(ts)) return 0;
       return ts < 1e12 ? ts * 1000 : ts;

@@ -1,4 +1,5 @@
 import { uniqueNamesGenerator, adjectives, animals } from 'unique-names-generator'
+import { toMs } from './time'
 
 export function generateJobName(): string {
   return uniqueNamesGenerator({
@@ -16,8 +17,7 @@ export function jobResultsFolderName(
   createdAt: number | undefined,
   jobId: string
 ): string {
-  // Job records store ms; incentive records may store seconds — normalize.
-  const ms = createdAt ? (createdAt < 1e12 ? createdAt * 1000 : createdAt) : Date.now()
+  const ms = createdAt ? toMs(createdAt) : Date.now()
   const d = new Date(ms)
   const pad = (n: number): string => String(n).padStart(2, '0')
   const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(

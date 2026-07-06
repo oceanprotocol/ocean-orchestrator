@@ -1,5 +1,6 @@
 import type * as vscode from 'vscode'
 import { LocalJobRecord, JobView, IncentiveJob } from '../types'
+import { toMs } from './time'
 
 const KEY_LOCAL_JOBS = 'ocean.localJobs'
 const KEY_SELECTED_JOB_ID = 'ocean.selectedJobId'
@@ -97,7 +98,7 @@ export function mergeJobs(
         status,
         envLabel: inc.environment || rec.envLabel,
         cost: inc.cost ?? rec.cost,
-        createdAt: rec.createdAt || inc.dateCreated,
+        createdAt: toMs(rec.createdAt || inc.dateCreated),
         finishedAt: inc.dateFinished,
         outputsURL: inc.outputsURL,
         isLocalOnly: false
@@ -126,7 +127,7 @@ export function mergeJobs(
       status: mapStatus(inc.statusText, inc.isRunning),
       envLabel: inc.environment,
       cost: inc.cost,
-      createdAt: inc.dateCreated,
+      createdAt: toMs(inc.dateCreated),
       finishedAt: inc.dateFinished,
       outputsURL: inc.outputsURL,
       isLocalOnly: false
