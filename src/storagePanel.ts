@@ -128,6 +128,8 @@ body {
 
 /* .muted — alias for .text-muted */
 .muted { color: var(--vscode-descriptionForeground); }
+
+td code { font-size: inherit; }
 </style>
 </head>
 <body>
