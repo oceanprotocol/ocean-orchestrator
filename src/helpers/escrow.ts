@@ -82,7 +82,7 @@ export async function getNodeAuthorization(
   }
 
   const count = Array.isArray(auths) ? auths.length : 0
-  if (count !== 1) {
+  if (count === 0) {
     return { authorized: false, reason: 'none', count }
   }
   const a = auths[0]

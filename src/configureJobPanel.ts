@@ -708,8 +708,10 @@ function scheduleCostEstimate() {
 }
 
 async function runCostEstimate() {
+  const costEl = document.getElementById('costValue');
   if (!state.selectedEnvId || !state.selectedFeeToken) {
-    document.getElementById('costValue').textContent = '—';
+    costEl.textContent = '—';
+    costEl.classList.remove('computing');
     return;
   }
   if (state.costPending) return;
@@ -727,16 +729,15 @@ async function runCostEstimate() {
     state.cost = res.cost ?? null;
     state.minLockSeconds = res.minLockSeconds ?? null;
     state.amountWei = res.amountWei ?? null;
-    const costEl = document.getElementById('costValue');
     costEl.textContent = state.cost != null ? state.cost.toFixed(4) + ' ' + tokenSymbol(state.selectedFeeToken) : '—';
-    costEl.classList.remove('computing');
     updateBalanceWarning();
     checkEnvAuth();
   } catch (e) {
-    document.getElementById('costValue').textContent = 'estimate unavailable';
+    costEl.textContent = 'estimate unavailable';
     state.cost = null;
   } finally {
     state.costPending = false;
+    costEl.classList.remove('computing');
     spinner.classList.add('hidden');
   }
 }

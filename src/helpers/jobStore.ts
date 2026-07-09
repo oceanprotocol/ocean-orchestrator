@@ -99,7 +99,7 @@ export function mergeJobs(
         envLabel: inc.environment || rec.envLabel,
         cost: inc.cost ?? rec.cost,
         createdAt: toMs(rec.createdAt || inc.dateCreated),
-        finishedAt: inc.dateFinished,
+        finishedAt: inc.dateFinished != null ? toMs(inc.dateFinished) : undefined,
         outputsURL: inc.outputsURL,
         isLocalOnly: false
       })
@@ -128,7 +128,7 @@ export function mergeJobs(
       envLabel: inc.environment,
       cost: inc.cost,
       createdAt: toMs(inc.dateCreated),
-      finishedAt: inc.dateFinished,
+      finishedAt: inc.dateFinished != null ? toMs(inc.dateFinished) : undefined,
       outputsURL: inc.outputsURL,
       isLocalOnly: false
     })
