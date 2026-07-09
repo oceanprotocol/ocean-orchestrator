@@ -1,9 +1,13 @@
 import {
   ComputeResourceRequest,
+  ComputeResource,
+  ComputeEnvFeesStructure,
   PersistentStorageAccessList,
   PersistentStorageBucket,
   PersistentStorageFileEntry
 } from '@oceanprotocol/lib'
+
+export type IdeResource = ComputeResourceRequest & { description?: string }
 
 export class SelectedConfig {
   authToken?: string
@@ -13,18 +17,20 @@ export class SelectedConfig {
   environmentId?: string
   feeToken?: string
   jobDuration?: string
-  resources?: ComputeResourceRequest[]
+  resources?: IdeResource[]
   chainId?: number
+  dataset?: string
 
   constructor(params: Partial<SelectedConfig>) {
     Object.assign(this, params)
   }
 
-  static parseResources(resources: string): ComputeResourceRequest[] {
+  static parseResources(resources: string): IdeResource[] {
     const resourcesRequestJson = JSON.parse(resources)
     return resourcesRequestJson.map((resource: any) => ({
       id: resource.id,
-      amount: resource.amount
+      amount: resource.amount,
+      ...(resource.description ? { description: resource.description } : {})
     }))
   }
 
@@ -34,6 +40,56 @@ export class SelectedConfig {
 }
 
 export type GatewayResponse = { httpStatus?: number; error?: string }
+
+export type EnvSummary = {
+  envId: string
+  nodeId: string
+  multiaddrs?: string[]
+  consumerAddress: string
+  label: string
+  resources?: ComputeResource[]
+  fees?: ComputeEnvFeesStructure
+  feeTokens: string[]
+}
+
+export type IncentiveJob = {
+  jobId: string
+  statusText: string
+  isRunning: boolean
+  isFree: boolean
+  environment: string
+  cost?: number
+  dateCreated: number
+  dateFinished?: number
+  outputsURL?: string
+  name?: string
+  peerId?: string
+}
+
+export type LocalJobRecord = {
+  jobId: string
+  name: string
+  envLabel: string
+  cost?: number
+  createdAt: number
+  status?: string
+  nodeUri?: string
+  authToken?: string
+  address?: string
+}
+
+export type JobView = {
+  jobId: string
+  name: string
+  status: 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Stopped'
+  envLabel: string
+  cost?: number
+  createdAt: number
+  finishedAt?: number
+  outputsURL?: string
+  isLocalOnly: boolean
+  peerId?: string
+}
 
 export type StorageAccessEntry = { chainId: string; contract: string }
 

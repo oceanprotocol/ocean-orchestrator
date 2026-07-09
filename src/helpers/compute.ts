@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import { stripAnsi } from './strip-ansi'
+import { stripAnsi, stripControlChars } from './strip-ansi'
 import fs from 'fs'
 import path from 'path'
 import * as tar from 'tar'
@@ -12,7 +12,6 @@ import {
   ComputeResultStream,
   ExtendedMetadataAlgorithm,
   FileObjectType,
-  NodeStatus,
   ProviderInstance
 } from '@oceanprotocol/lib'
 import { fetchDdoByDid } from './indexer'
@@ -179,7 +178,8 @@ export async function computeStart(
     [key: string]: string
   },
   additionalAssets?: ComputeAsset[],
-  outputBucketId?: string
+  outputBucketId?: string,
+  jobName?: string
 ): Promise<ComputeJob> {
   try {
     const container = getContainerConfig(
@@ -208,6 +208,14 @@ export async function computeStart(
 
     const uri = getNodeUri(config.multiaddresses)
 
+    // config.resources may carry a display-only `description` (GPU name) from
+    // the dashboard; the node only accepts { id, amount }.
+    const submitResources = config.resources?.map((r) => ({ id: r.id, amount: r.amount }))
+
+    // Persist the friendly job name on the job itself (round-trips via the node
+    // → monitor → incentive backend), so it survives reloads and other devices.
+    const metadata = jobName ? { name: jobName } : undefined
+
     if (!config.isFreeCompute) {
       const computeJob = await ProviderInstance.computeStart(
         uri,
@@ -217,9 +225,9 @@ export async function computeStart(
         algorithm,
         Number(config.jobDuration),
         config.feeToken!,
-        config.resources!,
+        submitResources!,
         config.chainId!,
-        undefined, // metadata
+        metadata,
         undefined, // additionalViewers
         undefined, // output
         undefined, // policyServer
@@ -237,8 +245,8 @@ export async function computeStart(
       config.environmentId,
       datasets,
       algorithm,
-      config.resources,
-      undefined, // metadata
+      submitResources,
+      metadata,
       undefined, // additionalViewers
       undefined, // output
       undefined, // policyServer
@@ -334,11 +342,17 @@ export async function saveResults(
   }
 }
 
+/**
+ * Streams a job's logs into the output channel. Returns true if any log output
+ * was written (false when the node returned nothing or the request failed —
+ * the caller can then surface a clear message instead of a blank panel).
+ */
 export async function getComputeLogs(
   config: SelectedConfig,
   jobId: string,
   outputChannel: vscode.OutputChannel
-): Promise<void> {
+): Promise<boolean> {
+  let wrote = false
   try {
     outputChannel.show(true)
     const logs = await ProviderInstance.computeStreamableLogs(
@@ -349,11 +363,16 @@ export async function getComputeLogs(
 
     const decoder = new TextDecoder('utf-8')
     for await (const chunk of logs) {
-      outputChannel.append(stripAnsi(decoder.decode(chunk.subarray(), { stream: true })))
+      const text = stripControlChars(stripAnsi(decoder.decode(chunk.subarray(), { stream: true })))
+      if (text.length > 0) {
+        wrote = true
+      }
+      outputChannel.append(text)
     }
   } catch (error) {
     console.error('Error fetching compute logs:', error)
   }
+  return wrote
 }
 
 async function attemptSaveOutput(
@@ -432,6 +451,13 @@ async function attemptSaveOutput(
   }
 }
 
+function nextOutputPrefix(dir: string, base: string): string {
+  if (!fs.existsSync(path.join(dir, `${base}.tar`))) return base
+  let n = 2
+  while (fs.existsSync(path.join(dir, `${base}(${n}).tar`))) n++
+  return `${base}(${n})`
+}
+
 export async function saveOutput(
   config: SelectedConfig,
   jobId: string,
@@ -440,20 +466,18 @@ export async function saveOutput(
   prefix: string = 'output',
   onProgress?: (bytesWritten: number, totalBytes: number) => void,
   totalSize?: number,
-  cancelSignal?: AbortSignal
+  cancelSignal?: AbortSignal,
+  folderName?: string
 ): Promise<string> {
   const baseDir = destinationFolder || path.join(process.cwd(), 'results')
-  const resultsDir = path.join(baseDir, jobId)
-  const filePath = path.join(resultsDir, `${prefix}.tar`)
+  const resultsDir = path.join(baseDir, folderName || jobId)
   await fs.promises.mkdir(resultsDir, { recursive: true })
+  const resolvedPrefix = nextOutputPrefix(resultsDir, prefix)
+  const filePath = path.join(resultsDir, `${resolvedPrefix}.tar`)
 
   return withRetrial(() =>
-    attemptSaveOutput(config, jobId, index, filePath, resultsDir, prefix, onProgress, totalSize, cancelSignal)
+    attemptSaveOutput(config, jobId, index, filePath, resultsDir, resolvedPrefix, onProgress, totalSize, cancelSignal)
   )
-}
-
-export async function getStatus(multiaddresses: string[] | undefined): Promise<NodeStatus> {
-  return await ProviderInstance.getNodeStatus(getNodeUri(multiaddresses))
 }
 
 export async function getComputeEnvironments(multiaddresses: string[] | undefined) {

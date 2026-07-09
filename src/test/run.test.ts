@@ -1,3 +1,5 @@
+process.env.INCENTIVE_BACKEND_URL = process.env.INCENTIVE_BACKEND_URL || 'https://api.oncompute.ai'
+
 // Mock ESM-only packages that cannot be required in CJS test context.
 // Only need to prevent require() from throwing — sinon stubs ProviderInstance at runtime.
 const mockRequire = require('mock-require')
@@ -19,3 +21,4 @@ mockRequire('@libp2p/utils', {
 })
 
 require('./extension.test')
+require('./unit/jobNames.test')

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { OceanProtocolViewProvider } from './viewProvider'
 import { StoragePanel } from './storagePanel'
+import { ConfigureJobPanel } from './configureJobPanel'
 import * as fs from 'fs'
 import * as path from 'path'
 import fetch from 'cross-fetch'
@@ -17,10 +18,9 @@ import {
   saveResults,
   streamToString,
   stopComputeJob,
-  withRetrial,
-  getStatus
+  withRetrial
 } from './helpers/compute'
-import { validateDatasetFromInput } from './helpers/validation'
+import { stripAnsi, stripControlChars } from './helpers/strip-ansi'
 import { SelectedConfig } from './types'
 import { ethers, Signer } from 'ethers'
 import { checkAndReadFile, listDirectoryContents } from './helpers/path'
@@ -34,7 +34,7 @@ import * as mountRegistry from './helpers/persistentMountRegistry'
 import * as outputBucketRegistry from './helpers/outputBucketRegistry'
 import { StorageErrorCode } from './types'
 import { DEFAULT_MULTIADDR } from './helpers/p2p'
-import { ComputeAsset, NodeStatus, ProviderInstance } from '@oceanprotocol/lib'
+import { ComputeAsset, ProviderInstance } from '@oceanprotocol/lib'
 import {
   initAnalytics,
   identifyUser,
@@ -43,6 +43,24 @@ import {
   shutdownAnalytics
 } from './helpers/analytics'
 import { randomUUID } from 'crypto'
+import {
+  fetchPaidEnvironments,
+  fetchEnvById,
+  fetchComputeJobs,
+  requestJobRefresh
+} from './helpers/incentive'
+import { estimateCost } from './helpers/cost'
+import { getEscrowBalance, getTokenSymbol, invalidateEscrowBalance, getNodeAuthorization } from './helpers/escrow'
+import { generateJobName, jobResultsFolderName } from './helpers/jobNames'
+import {
+  addLocalJob,
+  updateLocalJobStatus,
+  getLocalJobs,
+  mergeJobs,
+  getSelectedJobId,
+  setSelectedJobId
+} from './helpers/jobStore'
+import { BASE_CHAIN_ID, escrowFundingUrl, dashboardConnectUrl, nodeDashboardUrl } from './helpers/constants'
 
 // @oceanprotocol/lib bundles libp2p's browser user-agent helper which reads
 // globalThis.navigator.userAgent. VSCode's extension host defines `navigator`
@@ -65,9 +83,86 @@ let config: SelectedConfig = new SelectedConfig({
   multiaddresses: [DEFAULT_MULTIADDR]
 })
 let provider: OceanProtocolViewProvider
-let firstStartup = true
 let anonymousId: string
 let globalContext: vscode.ExtensionContext | undefined
+
+function nodeConfig(nodeUri: string | undefined, authToken: string | undefined): SelectedConfig {
+  return new SelectedConfig({ multiaddresses: nodeUri ? [nodeUri] : undefined, authToken })
+}
+
+let selectedProject: { algorithmPath: string; resultsFolderPath: string } | undefined
+let pendingJobName: string | undefined
+let lastEstimatedCost: number | undefined
+
+export function setSelectedProject(p: { algorithmPath: string; resultsFolderPath: string } | undefined) {
+  selectedProject = p
+  globalContext?.globalState.update('ocean.selectedProject', p)
+}
+
+function isGpuResource(r: any): boolean {
+  return (r?.type || '').toLowerCase() === 'gpu' || (r?.id || '').toLowerCase().includes('gpu')
+}
+
+// Must match the webview's GPU grouping key so requested and live GPUs line up.
+const gpuGroupKey = (r: any): string => r?.description || r?.id
+
+function mergeLiveInUse<T extends { id: string }>(resources: T[], liveResources: any[]): T[] {
+  const liveById = new Map((liveResources || []).map((r: any) => [r.id, r]))
+  return resources.map((r) => (liveById.get(r.id)?.inUse != null ? { ...r, inUse: liveById.get(r.id).inUse } : r))
+}
+
+async function liveEnvResources(
+  multiaddrs: string[] | undefined,
+  envId: string
+): Promise<any[] | null> {
+  try {
+    const liveEnv = (await getComputeEnvironments(multiaddrs))?.find((le: any) => le.id === envId)
+    return liveEnv?.resources ?? null
+  } catch { /* fall back to incentive API data */ }
+  return null
+}
+
+async function liveResourcesFor(
+  env: { envId: string; multiaddrs?: string[]; resources?: any[] },
+  multiaddrs?: string[]
+): Promise<any[]> {
+  const live = await liveEnvResources(multiaddrs ?? env.multiaddrs, env.envId)
+  return live ? mergeLiveInUse(env.resources || [], live) : env.resources || []
+}
+
+async function pushEnvInfo() {
+  if (!provider || !config.address || config.isFreeCompute || !config.environmentId || !config.feeToken) {
+    provider?.sendMessage({ type: 'envInfo', cost: null, balance: null, symbol: '' })
+    return
+  }
+  provider.sendMessage({ type: 'envInfo', loading: true })
+  const symbol = await getTokenSymbol(config.feeToken).catch(() => '')
+  let cost: number | null = null
+  let balance: number | null = null
+  let available: { id: string; max: number; inUse?: number }[] = []
+  try {
+    const env = await fetchEnvById(config.environmentId)
+    if (env) {
+      const merged = await liveResourcesFor(env, config.multiaddresses)
+      available = merged.map((r: any) => ({ id: r.id, max: r.max ?? r.maximum ?? r.total, inUse: r.inUse }))
+      const r = await estimateCost({
+        env: { ...env, multiaddrs: config.multiaddresses ?? env.multiaddrs },
+        resources: config.resources || [],
+        durationSeconds: Number(config.jobDuration) || 3600,
+        feeToken: config.feeToken
+      })
+      cost = r.cost
+    }
+  } catch (e) {
+    console.error('pushEnvInfo: cost estimate failed', e)
+  }
+  try {
+    balance = await getEscrowBalance(config.feeToken, config.address)
+  } catch (e) {
+    console.error('pushEnvInfo: escrow balance failed', e)
+  }
+  provider.sendMessage({ type: 'envInfo', cost, balance, symbol, available })
+}
 
 function currentMountScope(): mountRegistry.MountScope {
   return { nodeUri: config.multiaddresses?.[0], chainId: config.chainId }
@@ -158,27 +253,32 @@ vscode.window.registerUriHandler({
       config_count: configCount
     })
 
-    // Update the UI with the new values
     provider?.notifyConfigUpdate(config)
     pushStorageConfigSnapshot()
+    pushEnvInfo()
   }
 })
 
 export async function activate(context: vscode.ExtensionContext) {
   let savedSigner: Signer | null = null
   let savedJobId: string | null = null
+  let onJobLifecycleEvent: (() => Promise<void>) | undefined
   const completedJobs = new Map<
     string,
     {
       archiveIndex: number | null
       archiveSize: number
       resultsFolderPath: string
-      downloadCount: number
       logResults: Array<{ index: number; filename: string }>
     }
   >()
 
   globalContext = context
+
+  const savedProj = context.globalState.get<{ algorithmPath: string; resultsFolderPath: string }>('ocean.selectedProject')
+  if (savedProj) {
+    selectedProject = savedProj
+  }
 
   anonymousId = context.globalState.get<string>('anonymousId') ?? ''
   if (!anonymousId) {
@@ -211,9 +311,9 @@ export async function activate(context: vscode.ExtensionContext) {
   console.log('Ocean Orchestrator is now active!')
 
   try {
-    // Create and register the webview provider
-    provider = new OceanProtocolViewProvider((event, props) =>
-      trackEvent(anonymousId, event, props)
+    provider = new OceanProtocolViewProvider(
+      (event, props) => trackEvent(anonymousId, event, props),
+      () => selectedProject
     )
     console.log('Created OceanProtocolViewProvider')
 
@@ -221,17 +321,14 @@ export async function activate(context: vscode.ExtensionContext) {
       OceanProtocolViewProvider.viewType,
       provider,
       {
-        // This ensures the webview is retained even when not visible
         webviewOptions: { retainContextWhenHidden: true }
       }
     )
     console.log('Registered webview provider')
 
-    // Add to subscriptions
     context.subscriptions.push(registration)
     console.log('Added registration to subscriptions')
 
-    // Create a test command to verify the webview is accessible
     let testCommand = vscode.commands.registerCommand('ocean-protocol.test', () => {
       console.log('Test command executed')
       if (provider?.resolveWebviewView) {
@@ -243,80 +340,45 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(testCommand)
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('ocean-protocol.getStatus', async () => {
-            let status: NodeStatus
-            try {
-                status = await getStatus(config.multiaddresses)
-            } catch (e) {
-                trackP2PError(config.address || anonymousId, e, 'getStatus')
-                throw e
-            }
-
-            return status
-        })
-    )
-
-    // Add handler for environment loading
-    context.subscriptions.push(
-      vscode.commands.registerCommand('ocean-protocol.getEnvironments', async () => {
-        let environments
-        try {
-          environments = await getComputeEnvironments(config.multiaddresses)
-        } catch (e) {
-          trackP2PError(config.address || anonymousId, e, 'getComputeEnvironments')
-          throw e
-        }
-        // If it's the first startup, set the default resources and job duration
-        if (firstStartup && Array.isArray(environments) && environments.length > 0) {
-          const env =
-            environments.find((e: { id?: string }) => e.id === config.environmentId) ??
-            environments[0]
-          config.updateFields({
-            environmentId: config.environmentId || env.id,
-            resources: getDefaultResourcesFromFreeEnv(env),
-            jobDuration: String(env?.free?.maxJobDuration ?? 7200)
-          })
-          provider?.notifyConfigUpdate(config)
-          firstStartup = false
-        }
-
-        return environments
-      })
-    )
-
-    context.subscriptions.push(
-      vscode.commands.registerCommand(
-        'ocean-protocol.validateDataset',
-        async (input: string) => {
-          return await validateDatasetFromInput(config.multiaddresses, input)
-        }
-      )
-    )
-
-    context.subscriptions.push(
       vscode.commands.registerCommand(
         'ocean-protocol.stopComputeJob',
-        async (authToken: string) => {
-          if (!savedJobId) {
-            vscode.window.showErrorMessage('No active job to stop')
+        async (jobId?: string) => {
+          // Stop the requested job (selected in the sidebar); fall back to the
+          // session's own job when no id is passed.
+          const targetId = jobId || savedJobId
+          if (!targetId) {
+            vscode.window.showErrorMessage('No job to stop')
+            return
+          }
+          // Resolve the job's node + auth from its local record (same source the
+          // status poller uses), so we can stop a specific job, not just the
+          // session's. Fall back to the current config for the session's job.
+          const localJob = getLocalJobs(context).find((j) => j.jobId === targetId)
+          const nodeUri = localJob?.nodeUri ?? config.multiaddresses?.[0]
+          const stopAuth = localJob?.authToken ?? config.authToken
+          if (!nodeUri) {
+            vscode.window.showErrorMessage('Cannot stop this job: its node is unknown.')
             return
           }
           try {
-            await stopComputeJob(
-              config.multiaddresses,
-              savedJobId,
-              authToken || savedSigner
-            )
+            await stopComputeJob([nodeUri], targetId, stopAuth || savedSigner)
             trackEvent(config.address!, 'compute_job_stopped', {
-              job_id: savedJobId
+              job_id: targetId
             })
             vscode.window.showInformationMessage('Job stopped successfully')
           } catch (error) {
+            // Stop failed: leave the job intact so status sync keeps tracking it.
             vscode.window.showErrorMessage('Failed to stop job')
-          } finally {
+            return
+          }
+          // Only clear session state + stop the timer when we stopped the
+          // session's own job; otherwise just refresh the list.
+          if (targetId === savedJobId) {
             savedJobId = null
             provider.sendMessage({ type: 'jobStopped' })
           }
+          await updateLocalJobStatus(context, targetId, 'Stopped')
+          onJobLifecycleEvent?.().catch(() => {})
         }
       )
     )
@@ -363,7 +425,6 @@ export async function activate(context: vscode.ExtensionContext) {
               signer = savedSigner as ethers.HDNodeWallet
               console.log('Reusing existing wallet address:', signer.address)
             }
-            // Always generate a fresh auth token (tokens can expire)
             authToken = await generateAuthToken(config.multiaddresses, signer)
             config.updateFields({ address: signer.address })
           } catch (error) {
@@ -376,9 +437,9 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         }
 
-        // Update back the config with new values from the extension
         config.updateFields({ authToken, environmentId })
         pushStorageConfigSnapshot()
+        outputChannel.clear()
         provider.sendMessage({ type: 'jobLoading' })
 
         trackEvent(config.address!, 'compute_job_started', {
@@ -391,35 +452,31 @@ export async function activate(context: vscode.ExtensionContext) {
 
         const progressOptions = {
           location: vscode.ProgressLocation.Notification,
-          title: 'Compute Job Status',
+          title: pendingJobName ? `Compute Job: ${pendingJobName}` : 'Compute Job Status',
           cancellable: false
         }
         console.log('Progress options:', progressOptions)
 
+        let startedJobId: string | null = null
         try {
           await vscode.window.withProgress(progressOptions, async (progress) => {
-            // Initial setup
             progress.report({ message: 'Starting compute job...' })
 
             const algorithmContent = await fs.promises.readFile(algorithmPath, 'utf8')
 
-            // Start compute job
             const fileExtension = algorithmPath.split('.').pop()?.toLowerCase()
             const algorithmDir = path.dirname(algorithmPath)
 
-            // Get dockerfile
             const dockerfile = await checkAndReadFile(algorithmDir, 'Dockerfile')
 
-            // Get additional docker files
             const directoryContents = await listDirectoryContents(algorithmDir)
             let additionalDockerFiles: { [key: string]: string } = {}
 
-            // Map additional docker files
-            directoryContents.forEach(async (file) => {
+            for (const file of directoryContents) {
               if (file !== 'Dockerfile') {
                 additionalDockerFiles[file] = await checkAndReadFile(algorithmDir, file)
               }
-            })
+            }
 
             const envContent = await checkAndReadFile(algorithmDir, '.env')
             const envVars: Record<string, string> = {}
@@ -440,6 +497,17 @@ export async function activate(context: vscode.ExtensionContext) {
             const persistentAssets = await resolvePersistentMountAssets(progress)
             const outputBucketId = outputBucketRegistry.get(currentMountScope())
 
+            // Re-resolve GPU ids against live node data so back-to-back jobs don't
+            // reuse a GPU the previous job just locked.
+            if (!config.isFreeCompute && config.environmentId && config.multiaddresses && config.resources) {
+              let live: any[] | undefined
+              try {
+                live = (await getComputeEnvironments(config.multiaddresses))
+                  ?.find((e: any) => e.id === config.environmentId)?.resources
+              } catch { /* fetch failed — submit with the saved ids */ }
+              if (live) config.updateFields({ resources: resolveAvailableGpuIds(config.resources, live) })
+            }
+
             const computeResponse = await computeStart(
               config,
               algorithmContent,
@@ -451,7 +519,8 @@ export async function activate(context: vscode.ExtensionContext) {
               additionalDockerFiles,
               envVars,
               persistentAssets,
-              outputBucketId
+              outputBucketId,
+              pendingJobName
             )
             console.log('Compute result received:', computeResponse)
             const jobId = computeResponse.jobId
@@ -462,8 +531,28 @@ export async function activate(context: vscode.ExtensionContext) {
                 `Compute job started with ID: ${jobId}. Output bucket selected - results will be saved in bucket ${outputBucketName}. Existing files will be overwritten`
               )
             }
-            // Save the job ID for future use
             savedJobId = jobId
+            startedJobId = jobId
+            const jobConfig = nodeConfig(config.multiaddresses?.[0], config.authToken)
+
+            if (pendingJobName) {
+              const envLabel = config.environmentId ?? 'unknown'
+              await addLocalJob(context, {
+                jobId,
+                name: pendingJobName,
+                envLabel,
+                cost: lastEstimatedCost,
+                createdAt: Date.now(),
+                status: 'Running',
+                nodeUri: config.multiaddresses?.[0],
+                authToken: config.authToken,
+                address: config.address
+              })
+              if (config.address) {
+                requestJobRefresh(config.address, jobId).catch(() => { /* best-effort */ })
+              }
+              pendingJobName = undefined
+            }
 
             trackEvent(config.address!, 'compute_job_created', {
               is_free_compute: config.isFreeCompute,
@@ -471,40 +560,48 @@ export async function activate(context: vscode.ExtensionContext) {
               job_id: jobId
             })
 
-            // Notify webview that job started
             provider.sendMessage({
               type: 'jobStarted',
               jobId: jobId
             })
+            invalidateEscrowBalance() // funds were just locked — read fresh
+            pushEnvInfo()
+            // Patch the panel's availability locally instead of a fresh fetch.
+            if (config.environmentId && config.resources) {
+              ConfigureJobPanel.currentPanel?.sendMessage({
+                type: 'resourcesConsumed',
+                envId: config.environmentId,
+                consumed: config.resources.map((r) => ({ id: r.id, amount: r.amount ?? 1 }))
+              })
+            }
 
             outputChannel.show()
             outputChannel.appendLine(`Starting compute job with ID: ${jobId}`)
 
-            // Start fetching logs periodically
             let logStreamStarted = false
+            let lastStatusText: string | undefined
 
-            const computeLogsChannel = vscode.window.createOutputChannel(
-              `Algorithm Logs - ${jobId.slice(0, 3)}...`
-            )
             while (true) {
               console.log('Checking job status...')
               const status = await withRetrial(
-                () => checkComputeStatus(config, jobId),
+                () => checkComputeStatus(jobConfig, jobId),
                 progress
               )
               console.log('Job status:', status)
               console.log('Status text:', status.statusText)
               progress.report({ message: `${status.statusText}` })
-              outputChannel.appendLine(`Job status: ${status.statusText}`)
+              // Only log status transitions to the channel — repeating the same
+              // line every poll would interleave with the streaming algorithm logs.
+              if (status.statusText !== lastStatusText) {
+                outputChannel.appendLine(`Job status: ${status.statusText}`)
+                lastStatusText = status.statusText
+              }
 
-              // Start log streaming when job is running
               if (status.statusText.includes('Running algorithm') && !logStreamStarted) {
                 logStreamStarted = true
-                // Start fetching logs once
-                getComputeLogs(config, jobId, computeLogsChannel)
+                getComputeLogs(jobConfig, jobId, outputChannel)
                   .catch((err) => console.log('Log stream disconnected', err))
                   .finally(() => {
-                    // Reset the flag so we can reconnect if the job is still running
                     logStreamStarted = false
                   })
               }
@@ -518,9 +615,13 @@ export async function activate(context: vscode.ExtensionContext) {
                   error: 'OOMKilled'
                 })
                 vscode.window.showErrorMessage(errorMessage)
-                computeLogsChannel.appendLine(errorMessage)
-                savedJobId = null
+                outputChannel.appendLine(errorMessage)
+                await updateLocalJobStatus(context, jobId, 'Failed')
+                if (savedJobId === jobId) {
+                  savedJobId = null
+                }
                 provider.sendMessage({ type: 'jobStopped' })
+                onJobLifecycleEvent?.().catch(() => {})
 
                 return
               }
@@ -530,13 +631,15 @@ export async function activate(context: vscode.ExtensionContext) {
                 status.statusText.toLowerCase().includes('failed')
               ) {
                 try {
+                  const rec = getLocalJobs(context).find((j) => j.jobId === jobId)
                   await handleFailureLogsRetrieval(
-                    config,
+                    jobConfig,
                     jobId,
                     status,
                     resultsFolderPath,
-                    computeLogsChannel,
-                    progress
+                    outputChannel,
+                    progress,
+                    jobResultsFolderName(rec?.name, rec?.createdAt, jobId)
                   )
                 } catch (retrievalError) {
                   console.error('Error retrieving logs on failure:', retrievalError)
@@ -548,7 +651,10 @@ export async function activate(context: vscode.ExtensionContext) {
                   job_id: jobId,
                   error: status.statusText
                 })
-                savedJobId = null
+                await updateLocalJobStatus(context, jobId, 'Failed')
+                if (savedJobId === jobId) {
+                  savedJobId = null
+                }
                 provider.sendMessage({ type: 'jobStopped' })
                 throw new Error(`Job failed with status: ${status.statusText}`)
               }
@@ -570,12 +676,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     completedJobs.delete(completedJobs.keys().next().value!)
                   }
                   completedJobs.set(jobId, {
-                    // null when the job has no outputs.tar archive (e.g. results
-                    // were written to an output bucket); used to skip archive download
                     archiveIndex: archive ? archive.index : null,
                     archiveSize: archive?.filesize ?? 0,
                     resultsFolderPath,
-                    downloadCount: 0,
                     logResults: resultsWithoutArchive.map((r) => ({
                       index: r.index,
                       filename: r.filename
@@ -586,8 +689,12 @@ export async function activate(context: vscode.ExtensionContext) {
                     environment_id: config.environmentId,
                     job_id: jobId
                   })
-                  savedJobId = null
+                  if (savedJobId === jobId) {
+                    savedJobId = null
+                  }
+                  await updateLocalJobStatus(context, jobId, 'Completed')
                   provider.sendMessage({ type: 'jobCompleted', jobId })
+                  onJobLifecycleEvent?.().catch(() => {})
                   vscode.window.showInformationMessage(
                     'Job finished. Download results from the Download Results section.'
                   )
@@ -610,13 +717,18 @@ export async function activate(context: vscode.ExtensionContext) {
           trackEvent(config.address!, 'compute_job_failed', {
             is_free_compute: config.isFreeCompute,
             environment_id: config.environmentId,
-            job_id: savedJobId,
+            job_id: startedJobId,
             error: error instanceof Error ? error.message : String(error)
           })
 
-          // Reset job state and notify webview on error
-          savedJobId = null
+          if (startedJobId) {
+            await updateLocalJobStatus(context, startedJobId, 'Failed')
+          }
+          if (savedJobId === startedJobId) {
+            savedJobId = null
+          }
           provider.sendMessage({ type: 'jobStopped' })
+          onJobLifecycleEvent?.().catch(() => {})
 
           if (error instanceof Error && error.message) {
             vscode.window.showErrorMessage(error.message)
@@ -628,97 +740,206 @@ export async function activate(context: vscode.ExtensionContext) {
     )
     context.subscriptions.push(startComputeJob)
 
+    async function jobProbe(
+      jobId: string,
+      peerId?: string
+    ): Promise<{ probe: SelectedConfig; name?: string; createdAt?: number } | null> {
+      const localJob = getLocalJobs(context).find((j) => j.jobId === jobId)
+      let nodeUri = localJob?.nodeUri ?? config.multiaddresses?.[0]
+      // No local record of which node ran this job (older/incentive-only job)
+      // — resolve its peer id to a dialable multiaddr via DHT.
+      if (!localJob?.nodeUri && peerId) {
+        try {
+          nodeUri = await ProviderInstance.getMultiaddrFromPeerId(peerId)
+        } catch { /* DHT lookup failed — fall back to the current node, if any */ }
+      }
+      if (!nodeUri) {
+        return null
+      }
+      const probe = nodeConfig(nodeUri, localJob?.authToken ?? config.authToken)
+      return { probe, name: localJob?.name, createdAt: localJob?.createdAt }
+    }
+
+    async function downloadJobLogs(jobId: string, peerId?: string) {
+      const jp = await jobProbe(jobId, peerId)
+      const resultsFolderPath = selectedProject?.resultsFolderPath
+      if (!jp || !resultsFolderPath) {
+        vscode.window.showErrorMessage(
+          jp ? 'Open a project folder to download logs into.' : 'No node address available to download logs.'
+        )
+        return
+      }
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Downloading Logs', cancellable: false },
+        async (progress) => {
+          const status = await checkComputeStatus(jp.probe, jobId)
+          const hasLogs = (status?.results ?? []).some((r: any) => !r.filename?.includes('.tar'))
+          const folderName = jobResultsFolderName(jp.name, jp.createdAt, jobId)
+          await handleFailureLogsRetrieval(
+            jp.probe, jobId, status, resultsFolderPath, outputChannel, progress, folderName
+          )
+          vscode.window.showInformationMessage(
+            hasLogs ? 'Logs saved to results folder.' : 'No logs available for this job.'
+          )
+        }
+      )
+    }
+
+    async function saveJobResults(
+      probe: SelectedConfig,
+      jobId: string,
+      folderName: string,
+      resultsFolderPath: string,
+      archiveIndex: number | null,
+      archiveSize: number,
+      logResults: Array<{ index: number; filename: string }>
+    ) {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Downloading Results',
+          cancellable: true
+        },
+        async (progress, token) => {
+          const abortController = new AbortController()
+          token.onCancellationRequested(() => abortController.abort())
+
+          progress.report({ message: '0%' })
+          let lastIncrement = 0
+          const onDownloadProgress =
+            archiveSize > 0
+              ? (bytesWritten: number, totalBytes: number) => {
+                  const pct = Math.min(100, Math.floor((bytesWritten / totalBytes) * 100))
+                  progress.report({ message: `${pct}%`, increment: pct - lastIncrement })
+                  lastIncrement = pct
+                }
+              : undefined
+          try {
+            const hasArchive = archiveIndex != null
+            const totalFiles = logResults.length + (hasArchive ? 1 : 0)
+            let filesDone = 0
+
+            for (const log of logResults) {
+              if (abortController.signal.aborted) break
+              progress.report({ message: `Logs (${++filesDone}/${totalFiles})...` })
+              await getAndSaveLogs(
+                probe,
+                jobId,
+                log.index,
+                log.filename,
+                resultsFolderPath,
+                undefined,
+                folderName
+              )
+            }
+
+            if (!abortController.signal.aborted) {
+              if (archiveIndex != null) {
+                const filePath = await saveOutput(
+                  probe,
+                  jobId,
+                  archiveIndex,
+                  resultsFolderPath,
+                  'result-output',
+                  onDownloadProgress,
+                  archiveSize > 0 ? archiveSize : undefined,
+                  abortController.signal,
+                  folderName
+                )
+                outputChannel.appendLine(`Results saved to: ${filePath}`)
+                vscode.window.showInformationMessage('Outputs available in results folder.')
+              } else {
+                outputChannel.appendLine(
+                  'Results were written to the output bucket. Open Persistent Storage to view them.'
+                )
+                vscode.window.showInformationMessage(
+                  'Results are in the output bucket — open Persistent Storage to view them.'
+                )
+              }
+            }
+          } catch (error) {
+            if (abortController.signal.aborted) {
+              outputChannel.appendLine('Download cancelled.')
+            } else {
+              throw error
+            }
+          }
+        }
+      )
+    }
+
+    async function downloadJobResultsOnDemand(jobId: string, peerId?: string): Promise<boolean> {
+      const jp = await jobProbe(jobId, peerId)
+      const resultsFolderPath = selectedProject?.resultsFolderPath
+      if (!jp || !resultsFolderPath) {
+        return false
+      }
+      let results: any[] = []
+      try {
+        const status = await checkComputeStatus(jp.probe, jobId)
+        results = status?.results ?? []
+      } catch (e) {
+        outputChannel.appendLine(`Could not fetch results for ${jobId}: ${e}`)
+        return false
+      }
+      if (results.length === 0) {
+        return false
+      }
+      const archive = results.find((r: any) => r.filename?.includes('.tar'))
+      const logResults = results
+        .filter((r: any) => !r.filename?.includes('.tar'))
+        .map((r: any) => ({ index: r.index, filename: r.filename }))
+      await saveJobResults(
+        jp.probe,
+        jobId,
+        jobResultsFolderName(jp.name, jp.createdAt, jobId),
+        resultsFolderPath,
+        archive ? archive.index : null,
+        archive?.filesize ?? 0,
+        logResults
+      )
+      return true
+    }
+
     context.subscriptions.push(
       vscode.commands.registerCommand(
         'ocean-protocol.downloadResults',
-        async (jobId: string) => {
+        async (jobId: string, outputsURL?: string, status?: string, peerId?: string) => {
           const job = completedJobs.get(jobId)
           if (!job) {
-            vscode.window.showErrorMessage('Job results not found in this session.')
+            if (status === 'Failed') {
+              await downloadJobLogs(jobId, peerId)
+              return
+            }
+            if (await downloadJobResultsOnDemand(jobId, peerId)) {
+              return
+            }
+            if (outputsURL) {
+              let parsed: vscode.Uri | undefined
+              try {
+                parsed = vscode.Uri.parse(outputsURL, true)
+              } catch {
+                parsed = undefined
+              }
+              if (parsed && (parsed.scheme === 'http' || parsed.scheme === 'https')) {
+                vscode.env.openExternal(parsed)
+              } else {
+                vscode.window.showErrorMessage('Job results are not available for download.')
+              }
+            } else {
+              vscode.window.showInformationMessage('Results for this job are available in the dashboard.')
+            }
             return
           }
-          await vscode.window.withProgress(
-            {
-              location: vscode.ProgressLocation.Notification,
-              title: 'Downloading Results',
-              cancellable: true
-            },
-            async (progress, token) => {
-              const abortController = new AbortController()
-              token.onCancellationRequested(() => abortController.abort())
-
-              progress.report({ message: '0%' })
-              let lastIncrement = 0
-              const onDownloadProgress =
-                job.archiveSize > 0
-                  ? (bytesWritten: number, totalBytes: number) => {
-                      const pct = Math.min(
-                        100,
-                        Math.floor((bytesWritten / totalBytes) * 100)
-                      )
-                      progress.report({
-                        message: `${pct}%`,
-                        increment: pct - lastIncrement
-                      })
-                      lastIncrement = pct
-                    }
-                  : undefined
-              try {
-                const hasArchive = job.archiveIndex != null
-                const totalFiles = job.logResults.length + (hasArchive ? 1 : 0)
-                let filesDone = 0
-
-                for (const log of job.logResults) {
-                  if (abortController.signal.aborted) break
-                  progress.report({ message: `Logs (${++filesDone}/${totalFiles})...` })
-                  await getAndSaveLogs(
-                    config,
-                    jobId,
-                    log.index,
-                    log.filename,
-                    job.resultsFolderPath
-                  )
-                }
-
-                if (!abortController.signal.aborted) {
-                  if (job.archiveIndex != null) {
-                    job.downloadCount += 1
-                    const prefix =
-                      job.downloadCount === 1
-                        ? 'result-output'
-                        : `result-output(${job.downloadCount})`
-                    const filePath = await saveOutput(
-                      config,
-                      jobId,
-                      job.archiveIndex,
-                      job.resultsFolderPath,
-                      prefix,
-                      onDownloadProgress,
-                      job.archiveSize > 0 ? job.archiveSize : undefined,
-                      abortController.signal
-                    )
-                    outputChannel.appendLine(`Results saved to: ${filePath}`)
-                    vscode.window.showInformationMessage(
-                      'Outputs available in results folder.'
-                    )
-                  } else {
-                    // output-bucket job: results live in the bucket, no outputs.tar to fetch
-                    outputChannel.appendLine(
-                      'Results were written to the output bucket. Open Persistent Storage to view them.'
-                    )
-                    vscode.window.showInformationMessage(
-                      'Results are in the output bucket — open Persistent Storage to view them.'
-                    )
-                  }
-                }
-              } catch (error) {
-                if (abortController.signal.aborted) {
-                  outputChannel.appendLine('Download cancelled.')
-                } else {
-                  throw error
-                }
-              }
-            }
+          const jp = await jobProbe(jobId, peerId)
+          await saveJobResults(
+            jp?.probe ?? config,
+            jobId,
+            jobResultsFolderName(jp?.name, jp?.createdAt, jobId),
+            job.resultsFolderPath,
+            job.archiveIndex,
+            job.archiveSize,
+            job.logResults
           )
         }
       )
@@ -730,6 +951,10 @@ export async function activate(context: vscode.ExtensionContext) {
       const requestId = data.requestId
       try {
         switch (data.type) {
+          case 'openDashboard': {
+            await vscode.env.openExternal(vscode.Uri.parse(dashboardConnectUrl()))
+            return
+          }
           case 'listBuckets': {
             const buckets = await persistentStorage.listBuckets(config)
             reply({ type: 'bucketsLoaded', requestId, buckets })
@@ -902,6 +1127,516 @@ export async function activate(context: vscode.ExtensionContext) {
         pushStorageConfigSnapshot()
       })
     )
+
+    // Re-map requested GPUs to ids free right now (by model); throws if one is taken.
+    function resolveAvailableGpuIds(requested: any[], liveResources: any[]): any[] {
+      const isRequestedGpu = (r: any) => isGpuResource(r) && (r.amount ?? 0) > 0
+      if (!requested.some(isRequestedGpu)) return requested
+      const freeByModel = new Map<string, string[]>()
+      for (const r of liveResources) {
+        if (!isGpuResource(r) || (r.inUse ?? 0) > 0) continue
+        const key = gpuGroupKey(r)
+        ;(freeByModel.get(key) ?? freeByModel.set(key, []).get(key)!).push(r.id)
+      }
+      return requested.map((r) => {
+        if (!isRequestedGpu(r)) return r
+        const id = freeByModel.get(gpuGroupKey(r))?.shift()
+        if (!id) throw new Error(`No free "${gpuGroupKey(r)}" GPU right now — lower the GPU count and try again.`)
+        return { id, amount: 1, description: r.description }
+      })
+    }
+
+    // Apply a paid-job selection from the Configure panel (shared by saveConfig
+    // and runJob): resolve the env's node addr and update the live config.
+    async function applyPaidConfigFromPanel(data: any) {
+      const env = await fetchEnvById(data.envId)
+      if (!env) {
+        throw new Error('Selected environment is no longer available')
+      }
+      config.updateFields({
+        environmentId: data.envId,
+        multiaddresses: env.multiaddrs,
+        feeToken: data.feeToken,
+        chainId: BASE_CHAIN_ID,
+        resources: data.resources,
+        isFreeCompute: false,
+        jobDuration: String(data.durationSeconds || 3600),
+        dataset: data.dataset || undefined
+      })
+      provider?.notifyConfigUpdate(config)
+    }
+
+    async function handleConfigurePanelMessage(data: any, reply: (msg: any) => void) {
+      const requestId = data.requestId
+      try {
+        switch (data.type) {
+          case 'listEnvs': {
+            const query = typeof data.query === 'string' ? data.query.trim() : ''
+            const initial = !!data.initial
+            const envs = await fetchPaidEnvironments(query || undefined, 50)
+            if (initial && config.environmentId && !envs.some((e) => e.envId === config.environmentId)) {
+              const anchor = await fetchEnvById(config.environmentId)
+              if (anchor) envs.unshift(anchor)
+            }
+            reply({ type: 'envsLoaded', requestId, envs, query, initial })
+            return
+          }
+          case 'refreshEnvResources': {
+            let resources = await liveEnvResources(data.multiaddrs, data.envId)
+            if (!resources) {
+              const env = await fetchEnvById(data.envId)
+              resources = env?.resources ?? null
+            }
+            reply({ type: 'envResourcesRefreshed', requestId, envId: data.envId, resources })
+            return
+          }
+          case 'estimateCost': {
+            const env = await fetchEnvById(data.envId)
+            if (!env) {
+              reply({ type: 'configureJobError', requestId, message: 'Environment not found' })
+              return
+            }
+            // When estimating the currently-configured env, use the same node
+            // addr the sidebar (pushEnvInfo) uses so cost matches exactly.
+            const envForEstimate =
+              data.envId === config.environmentId
+                ? { ...env, multiaddrs: config.multiaddresses ?? env.multiaddrs }
+                : env
+            const result = await estimateCost({
+              env: envForEstimate,
+              resources: data.resources || [],
+              durationSeconds: data.durationSeconds || 3600,
+              feeToken: data.feeToken
+            })
+            lastEstimatedCost = result.cost
+            reply({
+              type: 'costEstimated',
+              requestId,
+              cost: result.cost,
+              minLockSeconds: result.minLockSeconds,
+              amountWei: result.amountWei
+            })
+            return
+          }
+          case 'getEscrowBalance': {
+            if (!config.address) {
+              reply({ type: 'balanceResult', requestId, balance: 0, noAddress: true })
+              return
+            }
+            const balance = await getEscrowBalance(data.feeToken, config.address)
+            reply({ type: 'balanceResult', requestId, balance })
+            ConfigureJobPanel.currentPanel?.sendMessage({
+              type: 'balanceUpdated',
+              balance,
+              feeToken: data.feeToken
+            })
+            return
+          }
+          case 'saveConfig': {
+            // GPU ids are re-resolved at submit time (startComputeJob), not here.
+            await applyPaidConfigFromPanel(data)
+            pushEnvInfo()
+            reply({ type: 'configSaved', requestId })
+            return
+          }
+          case 'openFunding': {
+            vscode.env.openExternal(vscode.Uri.parse(escrowFundingUrl()))
+            reply({ type: 'fundingOpened', requestId })
+            return
+          }
+          case 'copyNodeId': {
+            await vscode.env.clipboard.writeText(String(data.nodeId || ''))
+            reply({ type: 'nodeIdCopied', requestId })
+            return
+          }
+          case 'checkEnvAuth': {
+            if (config.isFreeCompute || !config.address) {
+              reply({ type: 'envAuthChecked', requestId, envId: data.envId, authorized: true, reason: 'ok', count: 0 })
+              return
+            }
+            const env = await fetchEnvById(data.envId)
+            if (!env) {
+              reply({ type: 'envAuthChecked', requestId, envId: data.envId, authorized: false, reason: 'none', count: 0 })
+              return
+            }
+            const res = await getNodeAuthorization(
+              data.feeToken || config.feeToken,
+              config.address,
+              env.consumerAddress,
+              data.amountWei,
+              data.minLockSeconds
+            )
+            reply({ type: 'envAuthChecked', requestId, envId: data.envId, ...res })
+            return
+          }
+          case 'openNodeDashboard': {
+            vscode.env.openExternal(vscode.Uri.parse(nodeDashboardUrl(data.nodeId)))
+            reply({ type: 'nodeDashboardOpened', requestId })
+            return
+          }
+          case 'mountFromStorage':
+          case 'openStorage': {
+            vscode.commands.executeCommand('ocean-protocol.openStoragePanel')
+            reply({ type: 'storageOpened', requestId })
+            return
+          }
+        }
+      } catch (err: any) {
+        const message = err?.message ?? String(err)
+        reply({ type: 'configureJobError', requestId, message, op: data.type })
+        vscode.window.showErrorMessage(`Configure Job error: ${message}`)
+      }
+    }
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.openConfigureJob', () => {
+        const panel = ConfigureJobPanel.open(context, async (data) => {
+          if (data.type === '_pollBalance') {
+            return
+          }
+          await handleConfigurePanelMessage(data, (msg: any) => panel.sendMessage(msg))
+        })
+        const resourceAmount = (id: string) =>
+          config.resources?.find((r) => r.id === id)?.amount
+        panel.sendMessage({
+          type: 'configSnapshot',
+          connected: !!config.authToken,
+          address: config.address,
+          nodeId: config.multiaddresses?.[0],
+          // Pre-select the currently-configured job so the panel reflects it.
+          environmentId: config.environmentId,
+          feeToken: config.feeToken,
+          resources: {
+            cpu: resourceAmount('cpu'),
+            ram: resourceAmount('ram'),
+            disk: resourceAmount('disk')
+          },
+          // Only GPUs the user actually selected (amount > 0) are pre-checked;
+          // the env may expose GPUs at amount 0 (offered but not selected).
+          gpuIds: (config.resources || [])
+            .filter((r) => !['cpu', 'ram', 'disk'].includes(r.id) && (r.amount ?? 0) > 0)
+            .map((r) => r.id),
+          durationSeconds: config.jobDuration ? Number(config.jobDuration) : undefined,
+          dataset: config.dataset
+        })
+      })
+    )
+
+    function localJobsForAddress() {
+      if (!config.address) {
+        return []
+      }
+      return getLocalJobs(context).filter((j) => j.address === config.address)
+    }
+
+    async function loadJobs() {
+      const inc = config.address ? await fetchComputeJobs(config.address).catch(() => []) : []
+      const merged = mergeJobs(localJobsForAddress(), inc)
+      provider?.sendMessage({
+        type: 'jobsLoaded',
+        jobs: merged,
+        selectedJobId: getSelectedJobId(context)
+      })
+    }
+
+    onJobLifecycleEvent = async () => {
+      invalidateEscrowBalance() // job settled/stopped/failed — balance changed
+      await loadJobs()
+      await pushEnvInfo()
+    }
+
+    const TERMINAL_STATUSES = ['Completed', 'Failed', 'Stopped']
+    let syncingStatuses = false
+    async function syncJobStatuses() {
+      if (syncingStatuses) {
+        return
+      }
+      syncingStatuses = true
+      try {
+        // Free jobs can run up to 2h and paid jobs longer; keep polling
+        // non-terminal jobs well past that so they don't get stuck after reload.
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000
+        const pollable = localJobsForAddress().filter(
+          (j) => j.createdAt > cutoff && !TERMINAL_STATUSES.includes(j.status ?? '')
+        )
+        if (pollable.length === 0) {
+          return
+        }
+        let changed = false
+        for (const job of pollable) {
+          const nodeUri = job.nodeUri ?? config.multiaddresses?.[0]
+          if (!nodeUri) {
+            continue
+          }
+          try {
+            const probe = nodeConfig(nodeUri, job.authToken ?? config.authToken)
+            const st = await checkComputeStatus(probe, job.jobId)
+            // Ocean C2D status codes: <10 = queued (0 started, 1 queued),
+            // >=70 = finished, in between = actively running (pulling/building/
+            // provisioning/running). Use the code, not the phrase — statusText
+            // like "Building algorithm image" doesn't contain the word "running".
+            const text = (st?.statusText ?? '').toLowerCase()
+            const code = st?.status ?? 0
+            let mapped: string
+            if (text.includes('fail') || text.includes('error')) {
+              mapped = 'Failed'
+            } else if (st?.dateFinished || code >= 70) {
+              mapped = 'Completed'
+            } else if (code >= 10) {
+              mapped = 'Running'
+            } else {
+              mapped = 'Queued'
+            }
+            if (mapped !== job.status) {
+              await updateLocalJobStatus(context, job.jobId, mapped)
+              changed = true
+            }
+          } catch {
+          }
+        }
+        if (changed) {
+          await loadJobs()
+        }
+      } finally {
+        syncingStatuses = false
+      }
+    }
+    const statusSyncTimer = setInterval(() => {
+      syncJobStatuses().catch(() => { /* best-effort */ })
+    }, 15000)
+    context.subscriptions.push({ dispose: () => clearInterval(statusSyncTimer) })
+    syncJobStatuses().catch(() => { /* best-effort */ })
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.loadJobs', async () => {
+        await loadJobs()
+        syncJobStatuses().catch(() => { /* best-effort */ })
+      })
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand(
+        'ocean-protocol.selectJob',
+        async (jobId: string) => {
+          await setSelectedJobId(context, jobId)
+          await loadJobs()
+        }
+      )
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand(
+        'ocean-protocol.setSelectedProject',
+        (algorithmPath: string, resultsFolderPath: string) => {
+          setSelectedProject({ algorithmPath, resultsFolderPath })
+        }
+      )
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.runFreeJob', async (opts?: {
+        jobName?: string
+        dockerImage?: string
+        dockerTag?: string
+      }) => {
+        if (!selectedProject) {
+          vscode.window.showErrorMessage('Select a project folder first')
+          return
+        }
+        // Coming from a paid config: drop the paid env/resources/dataset so we
+        // don't submit them to the free default node. (A previously loaded free
+        // env is kept, so a re-run survives a transient env-fetch failure.)
+        if (config.isFreeCompute !== true) {
+          config.updateFields({ environmentId: undefined, resources: undefined, jobDuration: undefined, dataset: undefined })
+        }
+        config.updateFields({ isFreeCompute: true, multiaddresses: [DEFAULT_MULTIADDR], feeToken: undefined, chainId: undefined })
+        if (!config.environmentId || !config.resources) {
+          let envs
+          try {
+            envs = await getComputeEnvironments([DEFAULT_MULTIADDR])
+          } catch (e) {
+            trackP2PError(config.address || anonymousId, e, 'getComputeEnvironments_runFreeJob')
+          }
+          if (Array.isArray(envs) && envs.length > 0) {
+            const env = envs.find((e: { id?: string }) => e.id === config.environmentId) ?? envs[0]
+            config.updateFields({
+              environmentId: env.id,
+              resources: getDefaultResourcesFromFreeEnv(env),
+              jobDuration: String(env?.free?.maxJobDuration ?? 7200)
+            })
+          }
+        }
+        if (!config.environmentId) {
+          vscode.window.showErrorMessage('Could not load a free compute environment from the default node')
+          return
+        }
+        pendingJobName = opts?.jobName || generateJobName()
+        provider?.sendMessage({ type: 'defaultJobName', name: generateJobName(), force: true })
+        await vscode.commands.executeCommand(
+          'ocean-protocol.startComputeJob',
+          selectedProject.algorithmPath,
+          selectedProject.resultsFolderPath,
+          config.authToken,
+          undefined,
+          opts?.dockerImage,
+          opts?.dockerTag,
+          config.environmentId
+        )
+      })
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.runJob', async (opts?: {
+        jobName?: string
+        dockerImage?: string
+        dockerTag?: string
+      }) => {
+        if (!selectedProject) {
+          vscode.window.showErrorMessage('Select a project folder first')
+          return
+        }
+        pendingJobName = opts?.jobName || pendingJobName || generateJobName()
+        provider?.sendMessage({ type: 'defaultJobName', name: generateJobName(), force: true })
+        await vscode.commands.executeCommand(
+          'ocean-protocol.startComputeJob',
+          selectedProject.algorithmPath,
+          selectedProject.resultsFolderPath,
+          config.authToken,
+          config.dataset,
+          opts?.dockerImage,
+          opts?.dockerTag,
+          config.environmentId
+        )
+      })
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.loadDefaultEnv', async () => {
+        try {
+          const envs = await getComputeEnvironments([DEFAULT_MULTIADDR])
+          if (!Array.isArray(envs) || envs.length === 0) {
+            provider?.sendMessage({ type: 'defaultEnvLoaded', error: true })
+            return
+          }
+          const env = envs.find((e: { id?: string }) => e.id === config.environmentId) ?? envs[0]
+
+          if (!config.environmentId || !config.resources) {
+            config.updateFields({
+              environmentId: env.id,
+              resources: getDefaultResourcesFromFreeEnv(env),
+              jobDuration: String(env?.free?.maxJobDuration ?? 7200)
+            })
+          }
+
+          const parts = DEFAULT_MULTIADDR.split('/')
+          const p2pIdx = parts.indexOf('p2p')
+          const parsedPeerId = p2pIdx !== -1 ? parts[p2pIdx + 1] : undefined
+          const nodeId = parsedPeerId || env.id
+
+          const freeResources = env.free?.resources ?? []
+          const resources = freeResources.map((r: { id: string; max?: number; inUse?: number }) => ({
+            id: r.id,
+            max: r.max ?? 0,
+            available: (r.max ?? 0) - (r.inUse ?? 0)
+          }))
+
+          provider?.sendMessage({
+            type: 'defaultEnvLoaded',
+            env: {
+              nodeId,
+              os: env.platform?.os,
+              arch: env.platform?.architecture,
+              resources,
+              maxJobDuration: env.free?.maxJobDuration
+            }
+          })
+        } catch (e) {
+          trackP2PError(config.address || anonymousId, e, 'loadDefaultEnv')
+          provider?.sendMessage({ type: 'defaultEnvLoaded', error: true })
+        }
+      })
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.showLogs', () => {
+        outputChannel.show()
+      })
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.viewJobLogs', async (jobId: string) => {
+        try {
+          const jp = await jobProbe(jobId)
+          if (!jp) {
+            outputChannel.appendLine(`Could not load logs for ${jobId}: no node address available`)
+            outputChannel.show()
+            return
+          }
+          const { probe, name } = jp
+          const label = name ?? jobId
+          outputChannel.clear()
+          outputChannel.appendLine(`--- Logs · ${label} ---`)
+          outputChannel.appendLine('Loading logs…')
+          outputChannel.show()
+
+          let logResults: any[] = []
+          let statusText: string | undefined
+          try {
+            const status = await checkComputeStatus(probe, jobId)
+            statusText = status?.statusText
+            logResults = (status?.results ?? []).filter((r: any) => !r.filename?.includes('.tar'))
+          } catch {
+          }
+
+          outputChannel.clear()
+          outputChannel.appendLine(`--- Logs · ${label} ---`)
+
+          let wroteAny = false
+          if (logResults.length > 0) {
+            for (const r of logResults) {
+              try {
+                const raw = await streamToString(await getComputeResult(probe, jobId, r.index))
+                const text = stripControlChars(stripAnsi(raw))
+                if (text && text.trim().length > 0) {
+                  outputChannel.appendLine(`---- ${r.filename} ----`)
+                  outputChannel.append(text.endsWith('\n') ? text : text + '\n')
+                  wroteAny = true
+                }
+              } catch {
+              }
+            }
+          }
+          if (!wroteAny) {
+            wroteAny = await getComputeLogs(probe, jobId, outputChannel)
+          }
+          if (!wroteAny) {
+            const inProgress =
+              statusText && !/finish|complet|fail|timeout|stopp|error/i.test(statusText)
+            if (inProgress) {
+              outputChannel.appendLine(`Waiting for logs… Job status: ${statusText}.`)
+              outputChannel.appendLine(
+                'Logs appear once the algorithm container starts running. Run "View logs" again to refresh.'
+              )
+            } else {
+              outputChannel.appendLine(
+                'No logs available for this job. It may have finished in a previous session — logs require the node to still hold them and a valid session.'
+              )
+            }
+          }
+          outputChannel.show()
+        } catch (e) {
+          outputChannel.appendLine(`Could not load logs for ${jobId}: ${e}`)
+          outputChannel.show()
+        }
+      })
+    )
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ocean-protocol.openConnectUrl', () => {
+        vscode.env.openExternal(vscode.Uri.parse(dashboardConnectUrl()))
+      })
+    )
+
   } catch (error) {
     console.error('Error during extension activation:', error)
     outputChannel.appendLine(`Error during extension activation: ${error}`)
@@ -958,7 +1693,6 @@ async function resolvePersistentMountAssets(
   })) as ComputeAsset[]
 }
 
-// Add deactivation handling
 export async function deactivate() {
   console.log('Ocean Orchestrator is being deactivated')
   outputChannel.appendLine('Ocean Orchestrator is being deactivated')
@@ -971,7 +1705,8 @@ async function handleFailureLogsRetrieval(
   status: any,
   resultsFolderPath: string,
   computeLogsChannel: vscode.OutputChannel,
-  progress: vscode.Progress<{ message?: string }>
+  progress: vscode.Progress<{ message?: string }>,
+  folderName?: string
 ) {
   if (!status.results || status.results.length === 0) {
     return
@@ -990,7 +1725,8 @@ async function handleFailureLogsRetrieval(
         result.index,
         result.filename,
         resultsFolderPath,
-        progress
+        progress,
+        folderName
       )
 
       const logContent = await fs.promises.readFile(filePathLogs, 'utf-8')
@@ -1009,7 +1745,8 @@ async function getAndSaveLogs(
   index: number,
   fileName: string,
   resultsFolderPath: string,
-  progress?: vscode.Progress<{ message?: string }>
+  progress?: vscode.Progress<{ message?: string }>,
+  folderName?: string
 ) {
   const result = await withRetrial(() => getComputeResult(config, jobId, index), progress)
 
@@ -1017,7 +1754,7 @@ async function getAndSaveLogs(
   const content = await streamToString(result)
   const filePathLogs = await saveResults(
     content,
-    path.join(resultsFolderPath, jobId),
+    path.join(resultsFolderPath, folderName || jobId),
     fileName
   )
   outputChannel.appendLine(`${fileName} saved to: ${filePathLogs}`)
