@@ -33,6 +33,7 @@ interface ComputeJob {
   payment?: { token?: string; cost?: number } | null
   outputsURL?: string
   metadata?: { [key: string]: string | number | boolean }
+  peerId?: string
 }
 
 function orderDialable(addrs: string[]): string[] {
@@ -131,7 +132,8 @@ export async function fetchComputeJobs(address: string): Promise<IncentiveJob[]>
     dateCreated: Number(job.dateCreated) || 0,
     dateFinished: Number(job.dateFinished) || undefined,
     outputsURL: job.outputsURL,
-    name: job.metadata?.name ? String(job.metadata.name) : undefined
+    name: job.metadata?.name ? String(job.metadata.name) : undefined,
+    peerId: job.peerId
   }))
 }
 

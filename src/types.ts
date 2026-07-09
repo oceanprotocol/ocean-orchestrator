@@ -63,6 +63,7 @@ export type IncentiveJob = {
   dateFinished?: number
   outputsURL?: string
   name?: string
+  peerId?: string
 }
 
 export type LocalJobRecord = {
@@ -87,6 +88,7 @@ export type JobView = {
   finishedAt?: number
   outputsURL?: string
   isLocalOnly: boolean
+  peerId?: string
 }
 
 export type StorageAccessEntry = { chainId: string; contract: string }

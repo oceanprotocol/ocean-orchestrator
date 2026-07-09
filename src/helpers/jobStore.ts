@@ -101,7 +101,8 @@ export function mergeJobs(
         createdAt: toMs(rec.createdAt || inc.dateCreated),
         finishedAt: inc.dateFinished != null ? toMs(inc.dateFinished) : undefined,
         outputsURL: inc.outputsURL,
-        isLocalOnly: false
+        isLocalOnly: false,
+        peerId: inc.peerId
       })
     } else {
       byId.set(key, {
@@ -130,7 +131,8 @@ export function mergeJobs(
       createdAt: toMs(inc.dateCreated),
       finishedAt: inc.dateFinished != null ? toMs(inc.dateFinished) : undefined,
       outputsURL: inc.outputsURL,
-      isLocalOnly: false
+      isLocalOnly: false,
+      peerId: inc.peerId
     })
   }
 

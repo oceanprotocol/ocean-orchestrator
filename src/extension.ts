@@ -740,11 +740,19 @@ export async function activate(context: vscode.ExtensionContext) {
     )
     context.subscriptions.push(startComputeJob)
 
-    function jobProbe(
-      jobId: string
-    ): { probe: SelectedConfig; name?: string; createdAt?: number } | null {
+    async function jobProbe(
+      jobId: string,
+      peerId?: string
+    ): Promise<{ probe: SelectedConfig; name?: string; createdAt?: number } | null> {
       const localJob = getLocalJobs(context).find((j) => j.jobId === jobId)
-      const nodeUri = localJob?.nodeUri ?? config.multiaddresses?.[0]
+      let nodeUri = localJob?.nodeUri ?? config.multiaddresses?.[0]
+      // No local record of which node ran this job (older/incentive-only job)
+      // — resolve its peer id to a dialable multiaddr via DHT.
+      if (!localJob?.nodeUri && peerId) {
+        try {
+          nodeUri = await ProviderInstance.getMultiaddrFromPeerId(peerId)
+        } catch { /* DHT lookup failed — fall back to the current node, if any */ }
+      }
       if (!nodeUri) {
         return null
       }
@@ -752,8 +760,8 @@ export async function activate(context: vscode.ExtensionContext) {
       return { probe, name: localJob?.name, createdAt: localJob?.createdAt }
     }
 
-    async function downloadJobLogs(jobId: string) {
-      const jp = jobProbe(jobId)
+    async function downloadJobLogs(jobId: string, peerId?: string) {
+      const jp = await jobProbe(jobId, peerId)
       const resultsFolderPath = selectedProject?.resultsFolderPath
       if (!jp || !resultsFolderPath) {
         vscode.window.showErrorMessage(
@@ -860,8 +868,8 @@ export async function activate(context: vscode.ExtensionContext) {
       )
     }
 
-    async function downloadJobResultsOnDemand(jobId: string): Promise<boolean> {
-      const jp = jobProbe(jobId)
+    async function downloadJobResultsOnDemand(jobId: string, peerId?: string): Promise<boolean> {
+      const jp = await jobProbe(jobId, peerId)
       const resultsFolderPath = selectedProject?.resultsFolderPath
       if (!jp || !resultsFolderPath) {
         return false
@@ -896,14 +904,14 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.commands.registerCommand(
         'ocean-protocol.downloadResults',
-        async (jobId: string, outputsURL?: string, status?: string) => {
+        async (jobId: string, outputsURL?: string, status?: string, peerId?: string) => {
           const job = completedJobs.get(jobId)
           if (!job) {
             if (status === 'Failed') {
-              await downloadJobLogs(jobId)
+              await downloadJobLogs(jobId, peerId)
               return
             }
-            if (await downloadJobResultsOnDemand(jobId)) {
+            if (await downloadJobResultsOnDemand(jobId, peerId)) {
               return
             }
             if (outputsURL) {
@@ -923,7 +931,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             return
           }
-          const jp = jobProbe(jobId)
+          const jp = await jobProbe(jobId, peerId)
           await saveJobResults(
             jp?.probe ?? config,
             jobId,
@@ -1122,7 +1130,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Re-map requested GPUs to ids free right now (by model); throws if one is taken.
     function resolveAvailableGpuIds(requested: any[], liveResources: any[]): any[] {
-      if (!requested.some(isGpuResource)) return requested
+      const isRequestedGpu = (r: any) => isGpuResource(r) && (r.amount ?? 0) > 0
+      if (!requested.some(isRequestedGpu)) return requested
       const freeByModel = new Map<string, string[]>()
       for (const r of liveResources) {
         if (!isGpuResource(r) || (r.inUse ?? 0) > 0) continue
@@ -1130,7 +1139,7 @@ export async function activate(context: vscode.ExtensionContext) {
         ;(freeByModel.get(key) ?? freeByModel.set(key, []).get(key)!).push(r.id)
       }
       return requested.map((r) => {
-        if (!isGpuResource(r)) return r
+        if (!isRequestedGpu(r)) return r
         const id = freeByModel.get(gpuGroupKey(r))?.shift()
         if (!id) throw new Error(`No free "${gpuGroupKey(r)}" GPU right now — lower the GPU count and try again.`)
         return { id, amount: 1, description: r.description }
@@ -1557,7 +1566,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.commands.registerCommand('ocean-protocol.viewJobLogs', async (jobId: string) => {
         try {
-          const jp = jobProbe(jobId)
+          const jp = await jobProbe(jobId)
           if (!jp) {
             outputChannel.appendLine(`Could not load logs for ${jobId}: no node address available`)
             outputChannel.show()

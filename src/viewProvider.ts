@@ -319,7 +319,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
                 'ocean-protocol.downloadResults',
                 data.jobId,
                 data.outputsURL,
-                data.status
+                data.status,
+                data.peerId
               )
               break
             case 'connect':
@@ -1338,7 +1339,8 @@ export class OceanProtocolViewProvider implements vscode.WebviewViewProvider {
               type: 'downloadResults',
               jobId: id,
               outputsURL: job?.outputsURL || undefined,
-              status: job ? jobEffStatus(job) : undefined
+              status: job ? jobEffStatus(job) : undefined,
+              peerId: job?.peerId || undefined
             });
           }
         });
