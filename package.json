@@ -97,6 +97,7 @@
     "@types/node": "20.x",
     "@types/sinon": "^17.0.3",
     "@types/vscode": "^1.96.0",
+    "@types/yauzl": "^3.4.0",
     "@typescript-eslint/eslint-plugin": "^8.3.0",
     "@typescript-eslint/parser": "^8.3.0",
     "@vscode/test-cli": "^0.0.10",
@@ -149,7 +150,8 @@
     "private-ip": "^3.0.2",
     "tar": "^7.5.11",
     "uint8arrays": "^4.0.6",
-    "unique-names-generator": "^4.7.1"
+    "unique-names-generator": "^4.7.1",
+    "yauzl": "^3.4.0"
   },
   "activationEvents": [
     "onCommand:ocean-protocol.searchAssets",

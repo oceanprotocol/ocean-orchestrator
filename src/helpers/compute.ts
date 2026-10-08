@@ -2,7 +2,7 @@ import * as vscode from 'vscode'
 import { stripAnsi, stripControlChars } from './strip-ansi'
 import fs from 'fs'
 import path from 'path'
-import * as tar from 'tar'
+import { extractOutputArchive, nextOutputPrefix, outputArchiveExtension } from './outputArchive'
 import {
   ComputeAlgorithm,
   ComputeAsset,
@@ -429,33 +429,25 @@ async function attemptSaveOutput(
 
     fileHandle!.end()
     await once(fileHandle!, 'finish')
+    if (totalSize != null && totalBytesWritten !== totalSize) {
+      throw new Error(`Incomplete output archive: received ${totalBytesWritten} of ${totalSize} bytes`)
+    }
 
     const extractDir = path.join(resultsDir, `${prefix}_extracted`)
     await fs.promises.mkdir(extractDir, { recursive: true })
 
-    await tar.x({
-      file: filePath,
-      cwd: extractDir,
-      preservePaths: true
-    })
+    await extractOutputArchive(filePath, extractDir)
     console.log(`Extracted contents to: ${extractDir}`)
     return filePath
   } catch (error: any) {
     console.log('--> Total bytes written:', totalBytesWritten)
-    console.error('Error saving tar output:', error)
-    throw new Error(`Failed to save tar output: ${error.message}`)
+    console.error('Error saving output archive:', error)
+    throw new Error(`Failed to save output archive: ${error.message}`)
   } finally {
     if (fileHandle && !fileHandle.closed) {
       fileHandle.destroy()
     }
   }
-}
-
-function nextOutputPrefix(dir: string, base: string): string {
-  if (!fs.existsSync(path.join(dir, `${base}.tar`))) return base
-  let n = 2
-  while (fs.existsSync(path.join(dir, `${base}(${n}).tar`))) n++
-  return `${base}(${n})`
 }
 
 export async function saveOutput(
@@ -467,13 +459,14 @@ export async function saveOutput(
   onProgress?: (bytesWritten: number, totalBytes: number) => void,
   totalSize?: number,
   cancelSignal?: AbortSignal,
-  folderName?: string
+  folderName?: string,
+  archiveFilename: string = 'outputs.tar'
 ): Promise<string> {
   const baseDir = destinationFolder || path.join(process.cwd(), 'results')
   const resultsDir = path.join(baseDir, folderName || jobId)
   await fs.promises.mkdir(resultsDir, { recursive: true })
   const resolvedPrefix = nextOutputPrefix(resultsDir, prefix)
-  const filePath = path.join(resultsDir, `${resolvedPrefix}.tar`)
+  const filePath = path.join(resultsDir, resolvedPrefix + outputArchiveExtension(archiveFilename))
 
   return withRetrial(() =>
     attemptSaveOutput(config, jobId, index, filePath, resultsDir, resolvedPrefix, onProgress, totalSize, cancelSignal)
