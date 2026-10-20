@@ -1,3 +1,4 @@
+import { isOutputResult } from './helpers/outputArchive'
 import * as vscode from 'vscode'
 import { OceanProtocolViewProvider } from './viewProvider'
 import { StoragePanel } from './storagePanel'
@@ -268,6 +269,7 @@ export async function activate(context: vscode.ExtensionContext) {
     {
       archiveIndex: number | null
       archiveSize: number
+      archiveFilename: string
       resultsFolderPath: string
       logResults: Array<{ index: number; filename: string }>
     }
@@ -665,11 +667,9 @@ export async function activate(context: vscode.ExtensionContext) {
                   progress.report({ message: 'Generating signature for request...' })
                   outputChannel.appendLine('Generating signature for request...')
                   const resultsLength = status.results.length
-                  const archive = status.results.find((result) =>
-                    result.filename.includes('.tar')
-                  )
+                  const archive = status.results.find(isOutputResult)
                   const resultsWithoutArchive = status.results.filter(
-                    (result) => result.index !== archive?.index
+                    (result) => !isOutputResult(result)
                   )
 
                   if (completedJobs.size >= 50) {
@@ -678,6 +678,7 @@ export async function activate(context: vscode.ExtensionContext) {
                   completedJobs.set(jobId, {
                     archiveIndex: archive ? archive.index : null,
                     archiveSize: archive?.filesize ?? 0,
+                    archiveFilename: archive?.filename ?? 'outputs.tar',
                     resultsFolderPath,
                     logResults: resultsWithoutArchive.map((r) => ({
                       index: r.index,
@@ -773,7 +774,7 @@ export async function activate(context: vscode.ExtensionContext) {
         { location: vscode.ProgressLocation.Notification, title: 'Downloading Logs', cancellable: false },
         async (progress) => {
           const status = await checkComputeStatus(jp.probe, jobId)
-          const hasLogs = (status?.results ?? []).some((r: any) => !r.filename?.includes('.tar'))
+          const hasLogs = (status?.results ?? []).some((r: any) => !isOutputResult(r))
           const folderName = jobResultsFolderName(jp.name, jp.createdAt, jobId)
           await handleFailureLogsRetrieval(
             jp.probe, jobId, status, resultsFolderPath, outputChannel, progress, folderName
@@ -792,7 +793,8 @@ export async function activate(context: vscode.ExtensionContext) {
       resultsFolderPath: string,
       archiveIndex: number | null,
       archiveSize: number,
-      logResults: Array<{ index: number; filename: string }>
+      logResults: Array<{ index: number; filename: string }>,
+      archiveFilename: string
     ) {
       await vscode.window.withProgress(
         {
@@ -844,7 +846,8 @@ export async function activate(context: vscode.ExtensionContext) {
                   onDownloadProgress,
                   archiveSize > 0 ? archiveSize : undefined,
                   abortController.signal,
-                  folderName
+                  folderName,
+                  archiveFilename
                 )
                 outputChannel.appendLine(`Results saved to: ${filePath}`)
                 vscode.window.showInformationMessage('Outputs available in results folder.')
@@ -885,9 +888,9 @@ export async function activate(context: vscode.ExtensionContext) {
       if (results.length === 0) {
         return false
       }
-      const archive = results.find((r: any) => r.filename?.includes('.tar'))
+      const archive = results.find(isOutputResult)
       const logResults = results
-        .filter((r: any) => !r.filename?.includes('.tar'))
+        .filter((r: any) => !isOutputResult(r))
         .map((r: any) => ({ index: r.index, filename: r.filename }))
       await saveJobResults(
         jp.probe,
@@ -896,7 +899,8 @@ export async function activate(context: vscode.ExtensionContext) {
         resultsFolderPath,
         archive ? archive.index : null,
         archive?.filesize ?? 0,
-        logResults
+        logResults,
+        archive?.filename ?? 'outputs.tar'
       )
       return true
     }
@@ -939,7 +943,8 @@ export async function activate(context: vscode.ExtensionContext) {
             job.resultsFolderPath,
             job.archiveIndex,
             job.archiveSize,
-            job.logResults
+            job.logResults,
+            job.archiveFilename
           )
         }
       )
@@ -1584,7 +1589,7 @@ export async function activate(context: vscode.ExtensionContext) {
           try {
             const status = await checkComputeStatus(probe, jobId)
             statusText = status?.statusText
-            logResults = (status?.results ?? []).filter((r: any) => !r.filename?.includes('.tar'))
+            logResults = (status?.results ?? []).filter((r: any) => !isOutputResult(r))
           } catch {
           }
 
@@ -1714,7 +1719,7 @@ async function handleFailureLogsRetrieval(
 
   computeLogsChannel.appendLine(`Job failed with status: ${status.statusText}\n`)
   const resultsWithoutArchive = status.results.filter(
-    (result) => !result.filename.includes('.tar')
+    (result) => !isOutputResult(result)
   )
 
   for (const result of resultsWithoutArchive) {

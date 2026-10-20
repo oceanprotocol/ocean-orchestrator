@@ -152,7 +152,7 @@ After a job completes, outputs are saved to your project folder under a folder n
 ```
 results/
   <job-name>_<date>_<time>/
-    result-output.tar
+    result-output.zip
     result-output_extracted/
       ...your algorithm's ./data/outputs/ contents...
     logs/
@@ -206,6 +206,12 @@ Mounted files appear at `/data/persistentStorage/<bucketId>/<fileName>` (read-on
 - **Not enough funds / insufficient escrow** — Run a free job instead, or use **Add funds** in the Configure Job panel to top up your escrow balance.
 - **Storage is locked** — Persistent storage is only available after you connect through the Ocean dashboard. Use the **Open dashboard** button in the Storage panel.
 - **General issues** — Check logs in the Output console. Logs are also saved in your project folder under `results/<job-name>_<date>_<time>/logs/`.
+
+Job outputs download as ZIP on newer nodes and TAR on older nodes. Orchestrator
+selects output archives by result type, saves the matching extension, and extracts
+both formats. ZIP files contain `/data/outputs` contents directly; legacy TAR files
+retain their outer `outputs/` directory. Logs remain separate files. Bucket-output
+jobs use Persistent Storage instead of an archive download.
 
 ## Development and Contributing
 
